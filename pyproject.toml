@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fiveclis"
+name = "jeeves"
 dynamic = ["version"]
-description = "A batteries-included Python CLI template"
+description = "Jeeves — a Jenkins CI/CD butler with impeccable taste"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-five-clis = "fiveclis.cli:main"
+jeeves = "jeeves.cli:main"
 
 [project.optional-dependencies]
 test = [

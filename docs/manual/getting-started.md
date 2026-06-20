@@ -1,11 +1,11 @@
-# Getting Started with five-clis
+# Getting Started with jeeves
 
 This guide walks you through everything you need to do after clicking **Use this template**
 on GitHub — from renaming the package to watching your first green CI run.
 
 ## 1. Create your repo from the template
 
-On the [five-clis GitHub page](https://github.com/mrsixw/five-clis), click
+On the [jeeves GitHub page](https://github.com/mrsixw/jeeves), click
 **Use this template → Create a new repository**. Give it a name (this becomes your CLI
 name, e.g. `myapp`).
 
@@ -36,12 +36,12 @@ You'll be prompted for three values:
 
 | Prompt | Example | What it sets |
 | ------ | ------- | ------------ |
-| Python package name | `myapp` | `src/fiveclis/` → `src/myapp/`, imports |
+| Python package name | `myapp` | `src/jeeves/` → `src/myapp/`, imports |
 | CLI binary name | `my-app` | Entry point, Makefile, CI, completions |
 | GitHub repo | `you/myapp` | `install.sh`, `updater.py`, CI badge |
 
 If you prefer to rename manually, see the full file-by-file reference table in the
-[five-clis README](https://github.com/mrsixw/five-clis#using-this-template).
+[jeeves README](https://github.com/mrsixw/jeeves#using-this-template).
 
 ## 4. Replace the demo business logic
 

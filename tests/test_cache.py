@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from fiveclis import cache as cache_mod
+from jeeves import cache as cache_mod
 
 
 def test_parse_ttl_seconds():
