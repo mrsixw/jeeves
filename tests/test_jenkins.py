@@ -317,3 +317,35 @@ def test_fetch_crumb_only_called_once() -> None:
         fresh.build("my-pipeline")
         fresh.cancel("my-pipeline", 5)
     assert crumb_adapter.call_count == 1
+
+
+# ── whoami ───────────────────────────────────────────────────────────────────
+
+
+def test_whoami_returns_user_data(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/me/api/json", json={"id": "alice", "fullName": "Alice Smith"})
+        data = client.whoami()
+    assert data["id"] == "alice"
+    assert data["fullName"] == "Alice Smith"
+
+
+def test_whoami_anonymous(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/me/api/json", json={"id": "anonymous", "fullName": "anonymous"})
+        data = client.whoami()
+    assert data["id"] == "anonymous"
+
+
+def test_whoami_http_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/me/api/json", status_code=403)
+        with pytest.raises(JenkinsError, match="403"):
+            client.whoami()
+
+
+def test_whoami_connection_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/me/api/json", exc=requests.ConnectionError("refused"))
+        with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
+            client.whoami()

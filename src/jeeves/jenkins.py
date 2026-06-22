@@ -94,3 +94,6 @@ class JenkinsClient:
 
     def nodes(self) -> list[dict]:
         return self._get("computer").get("computer", [])
+
+    def whoami(self) -> dict:
+        return self._get("me")

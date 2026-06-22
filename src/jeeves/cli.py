@@ -539,3 +539,44 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     click.echo(
         tabulate(rows, headers=["Node", "Status", "Executors"], tablefmt="simple")
     )
+
+
+# ── whoami ───────────────────────────────────────────────────────────────────
+
+
+@main.command()
+@_url_opt
+@_user_opt
+@_token_opt
+@click.pass_obj
+def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+    """Show the currently authenticated Jenkins user."""
+    client = _make_client(ctx, url, user, token)
+    try:
+        data = client.whoami()
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    user_id = data.get("id", "anonymous")
+    full_name = data.get("fullName", "")
+
+    if user_id == "anonymous":
+        click.echo(
+            click.style(
+                "👤 Connected as anonymous, sir. No credentials were presented.",
+                fg="yellow",
+            ),
+            color=ctx.colour,
+        )
+        return
+
+    if full_name and full_name != user_id:
+        identity = f"{user_id} ({full_name})"
+    else:
+        identity = user_id
+
+    click.echo(
+        click.style(f"👤 Authenticated as: {identity}", fg="green"),
+        color=ctx.colour,
+    )

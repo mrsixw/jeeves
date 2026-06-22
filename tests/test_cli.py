@@ -241,3 +241,39 @@ def test_nodes_empty_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
     assert "unoccupied" in result.output
+
+
+# ── whoami ────────────────────────────────────────────────────────────────────
+
+
+def test_whoami_authenticated(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "whoami",
+        lambda self: {"id": "alice", "fullName": "Alice Smith"},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 0
+    assert "alice" in result.output
+    assert "Alice Smith" in result.output
+
+
+def test_whoami_anonymous(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "whoami",
+        lambda self: {"id": "anonymous", "fullName": "anonymous"},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 0
+    assert "anonymous" in result.output
+
+
+def test_whoami_error_shows_butler_message(monkeypatch):
+    def _raise(self):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "whoami", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 1
+    assert "bother" in result.output
