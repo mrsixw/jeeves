@@ -182,6 +182,42 @@ def test_jobs_shows_roster(monkeypatch):
     assert "roster" in result.output
 
 
+def test_jobs_shows_status_labels(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None: [
+            {"name": "a", "color": "blue"},
+            {"name": "b", "color": "red"},
+            {"name": "c", "color": "yellow"},
+            {"name": "d", "color": "grey"},
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    assert result.exit_code == 0
+    assert "passed" in result.output
+    assert "failed" in result.output
+    assert "unstable" in result.output
+    assert "disabled" in result.output
+
+
+def test_jobs_shows_folder_icon(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None: [
+            {
+                "name": "my-folder",
+                "_class": "com.cloudbees.hudson.plugins.folder.Folder",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    assert result.exit_code == 0
+    assert "my-folder" in result.output
+    assert "folder" in result.output
+
+
 def test_jobs_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None: [])
     result = _invoke("--no-colour", "--no-update-check", "jobs")
@@ -231,6 +267,17 @@ def test_queue_shows_items(monkeypatch):
     assert "waiting" in result.output or "pending" in result.output
 
 
+def test_queue_shows_stuck_label(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "queue",
+        lambda self: [{"why": "blocked", "stuck": True, "task": {"name": "deploy"}}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "queue")
+    assert result.exit_code == 0
+    assert "yes" in result.output
+
+
 def test_queue_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "queue", lambda self: [])
     result = _invoke("--no-colour", "--no-update-check", "queue")
@@ -265,6 +312,21 @@ def test_nodes_shows_household_staff(monkeypatch):
     assert result.exit_code == 0
     assert "agent1" in result.output
     assert "household" in result.output
+
+
+def test_nodes_shows_online_offline_labels(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [
+            {"displayName": "up", "offline": False, "numExecutors": 2},
+            {"displayName": "down", "offline": True, "numExecutors": 0},
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "online" in result.output
+    assert "offline" in result.output
 
 
 def test_nodes_empty_shows_butler_message(monkeypatch):

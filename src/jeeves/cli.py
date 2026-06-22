@@ -16,7 +16,7 @@ from tabulate import tabulate
 from .config import get_jenkins_config, load_config, show_config, write_default_config
 from .jenkins import JenkinsClient, JenkinsError
 from .logger import configure as configure_logging
-from .ui import THEME_NAMES, apply_seasonal_colour, get_theme
+from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import check_for_update
 
 _ENVVAR_PREFIX = "JEEVES"
@@ -29,6 +29,8 @@ class _Ctx:
     colour: bool = True
     theme: object = None
     no_update_check: bool = False
+    seasonal_colours: bool = True
+    seasonal_calendar: str = "western"
 
 
 def _butler_error(msg: str, colour: bool) -> None:
@@ -252,7 +254,12 @@ def main(
     active_theme = get_theme(theme_name)
 
     ctx.obj = _Ctx(
-        cfg=cfg, colour=colour, theme=active_theme, no_update_check=no_update_check
+        cfg=cfg,
+        colour=colour,
+        theme=active_theme,
+        no_update_check=no_update_check,
+        seasonal_colours=seasonal_colours if seasonal_colours is not None else True,
+        seasonal_calendar=seasonal_calendar or "western",
     )
     ctx.ensure_object(_Ctx)
 
@@ -309,24 +316,52 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
         click.style(f"✅ Certainly, sir. {desc} is in fine form.", fg="green"),
         color=ctx.colour,
     )
-    rows = [["Mode", mode], ["Executors", executors], ["Jobs", jobs_count]]
-    click.echo(tabulate(rows, tablefmt="simple"))
+    mode_str = (
+        click.style(mode, fg="green", bold=True)
+        if ctx.colour and mode.upper() == "NORMAL"
+        else click.style(mode, fg="yellow", bold=True) if ctx.colour else mode
+    )
+    exec_cell = (
+        colour_grade_number(executors)
+        if ctx.colour and isinstance(executors, int)
+        else executors
+    )
+    rows = [
+        ["Mode", mode_str],
+        ["Executors", exec_cell],
+        ["Jobs", colour_grade_number(jobs_count) if ctx.colour else jobs_count],
+    ]
+    click.echo(tabulate(rows, tablefmt="simple"), color=ctx.colour)
 
 
 # ── jobs ────────────────────────────────────────────────────────────────────
 
-_JOB_COLOUR_MAP: dict[str, tuple[str, str]] = {
-    "blue": ("green", "passed"),
-    "blue_anime": ("green", "running"),
-    "red": ("red", "failed"),
-    "red_anime": ("red", "running"),
-    "yellow": ("yellow", "unstable"),
-    "yellow_anime": ("yellow", "running"),
-    "grey": ("white", "disabled"),
-    "notbuilt": ("white", "not built"),
-    "aborted": ("white", "aborted"),
-    "aborted_anime": ("white", "running"),
+# (colour, label, emoji)
+_JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
+    "blue": ("green", "passed", "✅"),
+    "blue_anime": ("green", "running", "▶️"),
+    "red": ("red", "failed", "❌"),
+    "red_anime": ("red", "running", "▶️"),
+    "yellow": ("yellow", "unstable", "⚠️"),
+    "yellow_anime": ("yellow", "running", "▶️"),
+    "grey": ("white", "disabled", "⏸️"),
+    "notbuilt": ("white", "not built", "🔘"),
+    "aborted": ("white", "aborted", "🚫"),
+    "aborted_anime": ("white", "running", "▶️"),
 }
+
+_FOLDER_CLASS_FRAGMENTS = ("Folder", "MultiBranch", "OrganizationFolder")
+
+
+def _is_folder(job: dict) -> bool:
+    cls = job.get("_class", "")
+    return any(f in cls for f in _FOLDER_CLASS_FRAGMENTS)
+
+
+def _format_job_status(raw: str, colour: bool) -> str:
+    fg, label, emoji = _JOB_COLOUR_MAP.get(raw, ("white", raw, "❓"))
+    text = f"{emoji} {label}"
+    return click.style(text, fg=fg, bold=True) if colour else text
 
 
 @main.command()
@@ -360,11 +395,27 @@ def jobs(
         color=ctx.colour,
     )
     rows = []
-    for j in job_list:
-        raw = j.get("color", "grey")
-        _, label = _JOB_COLOUR_MAP.get(raw, ("white", raw))
-        rows.append([j.get("name", "?"), label])
-    click.echo(tabulate(rows, headers=["Job", "Status"], tablefmt="simple"))
+    for idx, j in enumerate(job_list):
+        name = j.get("name", "?")
+        if _is_folder(j):
+            type_icon = "📁"
+            status_cell = click.style("folder", fg="cyan") if ctx.colour else "folder"
+        else:
+            type_icon = ""
+            raw = j.get("color", "grey")
+            status_cell = _format_job_status(raw, ctx.colour)
+        name_cell = f"{type_icon} {name}".strip() if type_icon else name
+        if ctx.colour and ctx.seasonal_colours:
+            name_cell = apply_seasonal_colour(
+                name_cell, idx, calendar=ctx.seasonal_calendar
+            )
+        rows.append([name_cell, status_cell])
+    click.echo(
+        tabulate(
+            rows, headers=["Job", "Status"], tablefmt="simple", disable_numparse=True
+        ),
+        color=ctx.colour,
+    )
 
 
 # ── build ───────────────────────────────────────────────────────────────────
@@ -490,12 +541,30 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         click.style("⏳ The pending requests, sir.", fg="cyan"), color=ctx.colour
     )
     rows = []
-    for item in items:
+    for idx, item in enumerate(items):
         task = item.get("task", {}).get("name", "?")
+        if ctx.colour and ctx.seasonal_colours:
+            task = apply_seasonal_colour(task, idx, calendar=ctx.seasonal_calendar)
         why = item.get("why", "")
-        stuck = "yes" if item.get("stuck") else "no"
+        is_stuck = item.get("stuck", False)
+        if ctx.colour:
+            stuck = (
+                click.style("⚠️ yes", fg="red", bold=True)
+                if is_stuck
+                else click.style("no", fg="green")
+            )
+        else:
+            stuck = "yes" if is_stuck else "no"
         rows.append([task, why, stuck])
-    click.echo(tabulate(rows, headers=["Job", "Reason", "Stuck"], tablefmt="simple"))
+    click.echo(
+        tabulate(
+            rows,
+            headers=["Job", "Reason", "Stuck"],
+            tablefmt="simple",
+            disable_numparse=True,
+        ),
+        color=ctx.colour,
+    )
 
 
 # ── cancel ──────────────────────────────────────────────────────────────────
@@ -568,13 +637,34 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
     click.echo(click.style("🏠 The household staff, sir.", fg="cyan"), color=ctx.colour)
     rows = []
-    for n in node_list:
+    for idx, n in enumerate(node_list):
         name = n.get("displayName", "?")
-        offline = "offline" if n.get("offline") else "online"
+        if ctx.colour and ctx.seasonal_colours:
+            name = apply_seasonal_colour(name, idx, calendar=ctx.seasonal_calendar)
+        is_offline = n.get("offline", False)
+        if ctx.colour:
+            status = (
+                click.style("🔴 offline", fg="red", bold=True)
+                if is_offline
+                else click.style("✅ online", fg="green", bold=True)
+            )
+        else:
+            status = "offline" if is_offline else "online"
         executors = n.get("numExecutors", "?")
-        rows.append([name, offline, executors])
+        exec_cell = (
+            colour_grade_number(executors)
+            if ctx.colour and isinstance(executors, int)
+            else executors
+        )
+        rows.append([name, status, exec_cell])
     click.echo(
-        tabulate(rows, headers=["Node", "Status", "Executors"], tablefmt="simple")
+        tabulate(
+            rows,
+            headers=["Node", "Status", "Executors"],
+            tablefmt="simple",
+            disable_numparse=True,
+        ),
+        color=ctx.colour,
     )
 
 
