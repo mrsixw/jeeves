@@ -232,7 +232,7 @@ def main(
 
     if do_init_config:
         path = write_default_config()
-        click.echo(f"Very good, sir. Default config written to: {path}")
+        click.echo(f"Very good. Default config written to: {path}")
         sys.exit(0)
 
     if do_show_config:
@@ -269,8 +269,7 @@ def main(
     if ctx.invoked_subcommand is None:
         spinner = random.choice(_BUTLER_ITEMS)
         greeting = (
-            f"{spinner}  Good morning, sir. "
-            "How may Jeeves be of assistance? Try --help."
+            f"{spinner}  Good morning. " "How may Jeeves be of assistance? Try --help."
         )
         if seasonal_colours and not no_colour:
             greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
@@ -315,7 +314,7 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     jobs_count = len(data.get("jobs", []))
 
     click.echo(
-        click.style(f"✅ Certainly, sir. {desc} is in fine form.", fg="green"),
+        click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
         color=ctx.colour,
     )
     mode_str = (
@@ -579,13 +578,13 @@ def jobs(
 
     if not job_list:
         click.echo(
-            "The staff roster appears entirely bare, sir. "
+            "The staff roster appears entirely bare. "
             "Jenkins would seem to have no positions filled at present."
         )
         return
 
     click.echo(
-        click.style("📋 Allow me to present the staff roster, sir.", fg="cyan"),
+        click.style("📋 Allow me to present the staff roster.", fg="cyan"),
         color=ctx.colour,
     )
     rows = _collect_job_rows(
@@ -651,9 +650,7 @@ def build(
     for p in params:
         if "=" not in p:
             click.echo(
-                click.style(
-                    f"I'm afraid '{p}' is not in KEY=VALUE format, sir.", fg="red"
-                ),
+                click.style(f"I'm afraid '{p}' is not in KEY=VALUE format.", fg="red"),
                 err=True,
                 color=ctx.colour,
             )
@@ -669,9 +666,7 @@ def build(
         sys.exit(1)
 
     click.echo(
-        click.style(
-            f"🚀 I shall dispatch '{job}' at once, sir. Very good.", fg="green"
-        ),
+        click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
         color=ctx.colour,
     )
 
@@ -733,14 +728,12 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
     if not items:
         click.echo(
-            "The queue stands quite empty, sir. "
+            "The queue stands quite empty. "
             "Jenkins is evidently at leisure — a rare and precious state of affairs."
         )
         return
 
-    click.echo(
-        click.style("⏳ The pending requests, sir.", fg="cyan"), color=ctx.colour
-    )
+    click.echo(click.style("⏳ The pending requests.", fg="cyan"), color=ctx.colour)
     rows = []
     for idx, item in enumerate(items):
         task_name = item.get("task", {}).get("name", "?")
@@ -836,12 +829,12 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
     if not node_list:
         click.echo(
-            "The household staff appears to have entirely absented themselves, sir. "
+            "The household staff appears to have entirely absented themselves. "
             "One trusts they haven't all handed in their notice."
         )
         return
 
-    click.echo(click.style("🏠 The household staff, sir.", fg="cyan"), color=ctx.colour)
+    click.echo(click.style("🏠 The household staff.", fg="cyan"), color=ctx.colour)
     rows = []
     for idx, n in enumerate(node_list):
         display_name = n.get("displayName", "?")
@@ -902,7 +895,7 @@ def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     if user_id == "anonymous":
         click.echo(
             click.style(
-                "👤 Connected as anonymous, sir. No credentials were presented.",
+                "👤 Connected as anonymous. No credentials were presented.",
                 fg="yellow",
             ),
             color=ctx.colour,
