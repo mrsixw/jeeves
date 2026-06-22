@@ -104,6 +104,15 @@ def test_jobs_nested_folder(client: JenkinsClient) -> None:
     assert result[0]["name"] == "deploy"
 
 
+def test_jobs_depth_passes_query_param(client: JenkinsClient) -> None:
+    payload = {"jobs": [{"name": "x", "healthReport": [{"score": 80}]}]}
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/api/json", json=payload)
+        result = client.jobs(depth=1)
+    assert m.last_request.qs == {"depth": ["1"]}
+    assert result[0]["healthReport"][0]["score"] == 80
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 
