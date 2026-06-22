@@ -858,11 +858,15 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
             if ctx.colour and isinstance(executors, int)
             else executors
         )
-        rows.append([name, status, exec_cell])
+        raw_labels = [
+            lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
+        ]
+        labels = ", ".join(lbl for lbl in raw_labels if lbl != display_name)
+        rows.append([name, status, exec_cell, labels])
     click.echo(
         tabulate(
             rows,
-            headers=["Node", "Status", "Executors"],
+            headers=["Node", "Status", "Executors", "Labels"],
             tablefmt="simple",
             disable_numparse=True,
         ),
