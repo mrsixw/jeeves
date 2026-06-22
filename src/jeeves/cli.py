@@ -486,13 +486,13 @@ def _collect_job_rows(
         display_name = full_path
         idx = colour_index[0]
         colour_index[0] += 1
+        if base_url:
+            job_url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
+            display_name = _hyperlink(display_name, job_url, colour)
         if colour and seasonal_colours:
             display_name = apply_seasonal_colour(
                 display_name, idx, calendar=seasonal_calendar
             )
-        if base_url:
-            job_url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
-            display_name = _hyperlink(display_name, job_url, colour)
 
         row = [display_name, type_cell, status_cell]
         if not no_weather:
@@ -740,10 +740,9 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         task_url = item.get("task", {}).get("url") or (
             f"{client._base}/{_normalize_jenkins_path(task_name)}"
         )
-        task = task_name
+        task = _hyperlink(task_name, task_url, ctx.colour)
         if ctx.colour and ctx.seasonal_colours:
             task = apply_seasonal_colour(task, idx, calendar=ctx.seasonal_calendar)
-        task = _hyperlink(task, task_url, ctx.colour)
         why = item.get("why", "")
         is_stuck = item.get("stuck", False)
         if ctx.colour:
@@ -841,10 +840,9 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         _built_in = {"master", "Built-In Node"}
         url_name = "(built-in)" if display_name in _built_in else display_name
         node_url = f"{client._base}/computer/{url_name}/"
-        name = display_name
+        name = _hyperlink(display_name, node_url, ctx.colour)
         if ctx.colour and ctx.seasonal_colours:
             name = apply_seasonal_colour(name, idx, calendar=ctx.seasonal_calendar)
-        name = _hyperlink(name, node_url, ctx.colour)
         is_offline = n.get("offline", False)
         if ctx.colour:
             status = (
