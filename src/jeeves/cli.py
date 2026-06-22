@@ -32,8 +32,32 @@ class _Ctx:
 
 
 def _butler_error(msg: str, colour: bool) -> None:
+    if "Cannot reach Jenkins at" in msg:
+        url = msg.split("Cannot reach Jenkins at ", 1)[-1].strip()
+        text = (
+            f"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, "
+            "sir. The line seems entirely dead."
+        )
+    elif "Jenkins returned 403" in msg:
+        text = (
+            "Jenkins has turned us away at the door, sir. A 403 — most irregular. "
+            "One suspects our credentials may not be in order."
+        )
+    elif "Jenkins returned 404" in msg:
+        text = (
+            "I searched the premises most thoroughly, sir, but the requested resource "
+            "could not be found. A 404. It has vanished like Bertie's good intentions."
+        )
+    elif "Jenkins returned" in msg:
+        code = msg.split("Jenkins returned ", 1)[-1].strip()
+        text = (
+            f"Jenkins appears to be in a considerable state of disarray, sir. "
+            f"A {code}. Perhaps a restorative cup of tea is called for."
+        )
+    else:
+        text = f"I'm afraid there's been a spot of bother, sir: {msg}"
     click.echo(
-        click.style(f"I'm afraid there's been a spot of bother, sir: {msg}", fg="red"),
+        click.style(f"🎩 {text}", fg="red"),
         err=True,
         color=colour,
     )
@@ -282,7 +306,7 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     jobs_count = len(data.get("jobs", []))
 
     click.echo(
-        click.style(f"Certainly, sir. {desc} is in fine form.", fg="green"),
+        click.style(f"✅ Certainly, sir. {desc} is in fine form.", fg="green"),
         color=ctx.colour,
     )
     rows = [["Mode", mode], ["Executors", executors], ["Jobs", jobs_count]]
@@ -325,11 +349,14 @@ def jobs(
         sys.exit(1)
 
     if not job_list:
-        click.echo("The staff roster appears to be unoccupied at present, sir.")
+        click.echo(
+            "The staff roster appears entirely bare, sir. "
+            "Jenkins would seem to have no positions filled at present."
+        )
         return
 
     click.echo(
-        click.style("Allow me to present the staff roster, sir.", fg="cyan"),
+        click.style("📋 Allow me to present the staff roster, sir.", fg="cyan"),
         color=ctx.colour,
     )
     rows = []
@@ -390,7 +417,9 @@ def build(
         sys.exit(1)
 
     click.echo(
-        click.style(f"I shall dispatch '{job}' at once, sir. Very good.", fg="green"),
+        click.style(
+            f"🚀 I shall dispatch '{job}' at once, sir. Very good.", fg="green"
+        ),
         color=ctx.colour,
     )
 
@@ -451,10 +480,15 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         sys.exit(1)
 
     if not items:
-        click.echo("The queue appears to be unoccupied at present, sir.")
+        click.echo(
+            "The queue stands quite empty, sir. "
+            "Jenkins is evidently at leisure — a rare and precious state of affairs."
+        )
         return
 
-    click.echo(click.style("The pending requests, sir.", fg="cyan"), color=ctx.colour)
+    click.echo(
+        click.style("⏳ The pending requests, sir.", fg="cyan"), color=ctx.colour
+    )
     rows = []
     for item in items:
         task = item.get("task", {}).get("name", "?")
@@ -502,7 +536,7 @@ def cancel(
 
     click.echo(
         click.style(
-            f"Consider build #{build_id} of '{job}' dismissed, sir.", fg="green"
+            f"🛑 Consider build #{build_id} of '{job}' dismissed, sir.", fg="green"
         ),
         color=ctx.colour,
     )
@@ -526,10 +560,13 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         sys.exit(1)
 
     if not node_list:
-        click.echo("The household staff appears to be unoccupied at present, sir.")
+        click.echo(
+            "The household staff appears to have entirely absented themselves, sir. "
+            "One trusts they haven't all handed in their notice."
+        )
         return
 
-    click.echo(click.style("The household staff, sir.", fg="cyan"), color=ctx.colour)
+    click.echo(click.style("🏠 The household staff, sir.", fg="cyan"), color=ctx.colour)
     rows = []
     for n in node_list:
         name = n.get("displayName", "?")
