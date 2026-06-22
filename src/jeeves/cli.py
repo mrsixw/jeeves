@@ -16,7 +16,7 @@ import click
 from tabulate import tabulate
 
 from .config import get_jenkins_config, load_config, show_config, write_default_config
-from .jenkins import JenkinsClient, JenkinsError
+from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import check_for_update
@@ -232,7 +232,7 @@ def main(
 
     if do_init_config:
         path = write_default_config()
-        click.echo(f"Very good, sir. Default config written to: {path}")
+        click.echo(f"Very good. Default config written to: {path}")
         sys.exit(0)
 
     if do_show_config:
@@ -269,8 +269,7 @@ def main(
     if ctx.invoked_subcommand is None:
         spinner = random.choice(_BUTLER_ITEMS)
         greeting = (
-            f"{spinner}  Good morning, sir. "
-            "How may Jeeves be of assistance? Try --help."
+            f"{spinner}  Good morning. " "How may Jeeves be of assistance? Try --help."
         )
         if seasonal_colours and not no_colour:
             greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
@@ -315,7 +314,7 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     jobs_count = len(data.get("jobs", []))
 
     click.echo(
-        click.style(f"✅ Certainly, sir. {desc} is in fine form.", fg="green"),
+        click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
         color=ctx.colour,
     )
     mode_str = (
@@ -363,6 +362,17 @@ _JOB_TYPE_MAP: list[tuple[str, str, str]] = [
 _JOB_TYPE_FALLBACK = ("🔨", "job")
 
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[a-zA-Z]|\]8;;.*?\x1b\\|\]8;;.*?\x07)")
+
+_OSC8_OPEN = "\x1b]8;;{url}\x1b\\"
+_OSC8_CLOSE = "\x1b]8;;\x1b\\"
+
+
+def _hyperlink(text: str, url: str, colour: bool) -> str:
+    """Wrap text in an OSC 8 terminal hyperlink when colour output is active."""
+    if not colour:
+        return text
+    return f"{_OSC8_OPEN.format(url=url)}{text}{_OSC8_CLOSE}"
+
 
 _WEATHER_MAP: list[tuple[int, str, str, str]] = [
     (80, "green", "☀️", "sunny"),
@@ -453,6 +463,7 @@ def _collect_job_rows(
     expand: bool,
     path_prefix: str,
     colour_index: list[int],
+    base_url: str = "",
 ) -> list[list]:
     """Recursively build table rows, expanding folders when expand=True."""
     rows = []
@@ -479,6 +490,9 @@ def _collect_job_rows(
             display_name = apply_seasonal_colour(
                 display_name, idx, calendar=seasonal_calendar
             )
+        if base_url:
+            job_url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
+            display_name = _hyperlink(display_name, job_url, colour)
 
         row = [display_name, type_cell, status_cell]
         if not no_weather:
@@ -502,6 +516,7 @@ def _collect_job_rows(
                     expand,
                     full_path,
                     colour_index,
+                    base_url,
                 )
             )
 
@@ -563,13 +578,13 @@ def jobs(
 
     if not job_list:
         click.echo(
-            "The staff roster appears entirely bare, sir. "
+            "The staff roster appears entirely bare. "
             "Jenkins would seem to have no positions filled at present."
         )
         return
 
     click.echo(
-        click.style("📋 Allow me to present the staff roster, sir.", fg="cyan"),
+        click.style("📋 Allow me to present the staff roster.", fg="cyan"),
         color=ctx.colour,
     )
     rows = _collect_job_rows(
@@ -582,6 +597,7 @@ def jobs(
         expand,
         path_prefix=folder or "",
         colour_index=[0],
+        base_url=client._base,
     )
     headers = ["Job", "Type", "Status"] + ([] if no_weather else ["Weather"])
 
@@ -634,9 +650,7 @@ def build(
     for p in params:
         if "=" not in p:
             click.echo(
-                click.style(
-                    f"I'm afraid '{p}' is not in KEY=VALUE format, sir.", fg="red"
-                ),
+                click.style(f"I'm afraid '{p}' is not in KEY=VALUE format.", fg="red"),
                 err=True,
                 color=ctx.colour,
             )
@@ -652,9 +666,7 @@ def build(
         sys.exit(1)
 
     click.echo(
-        click.style(
-            f"🚀 I shall dispatch '{job}' at once, sir. Very good.", fg="green"
-        ),
+        click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
         color=ctx.colour,
     )
 
@@ -716,19 +728,22 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
     if not items:
         click.echo(
-            "The queue stands quite empty, sir. "
+            "The queue stands quite empty. "
             "Jenkins is evidently at leisure — a rare and precious state of affairs."
         )
         return
 
-    click.echo(
-        click.style("⏳ The pending requests, sir.", fg="cyan"), color=ctx.colour
-    )
+    click.echo(click.style("⏳ The pending requests.", fg="cyan"), color=ctx.colour)
     rows = []
     for idx, item in enumerate(items):
-        task = item.get("task", {}).get("name", "?")
+        task_name = item.get("task", {}).get("name", "?")
+        task_url = item.get("task", {}).get("url") or (
+            f"{client._base}/{_normalize_jenkins_path(task_name)}"
+        )
+        task = task_name
         if ctx.colour and ctx.seasonal_colours:
             task = apply_seasonal_colour(task, idx, calendar=ctx.seasonal_calendar)
+        task = _hyperlink(task, task_url, ctx.colour)
         why = item.get("why", "")
         is_stuck = item.get("stuck", False)
         if ctx.colour:
@@ -814,17 +829,22 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
     if not node_list:
         click.echo(
-            "The household staff appears to have entirely absented themselves, sir. "
+            "The household staff appears to have entirely absented themselves. "
             "One trusts they haven't all handed in their notice."
         )
         return
 
-    click.echo(click.style("🏠 The household staff, sir.", fg="cyan"), color=ctx.colour)
+    click.echo(click.style("🏠 The household staff.", fg="cyan"), color=ctx.colour)
     rows = []
     for idx, n in enumerate(node_list):
-        name = n.get("displayName", "?")
+        display_name = n.get("displayName", "?")
+        _built_in = {"master", "Built-In Node"}
+        url_name = "(built-in)" if display_name in _built_in else display_name
+        node_url = f"{client._base}/computer/{url_name}/"
+        name = display_name
         if ctx.colour and ctx.seasonal_colours:
             name = apply_seasonal_colour(name, idx, calendar=ctx.seasonal_calendar)
+        name = _hyperlink(name, node_url, ctx.colour)
         is_offline = n.get("offline", False)
         if ctx.colour:
             status = (
@@ -875,7 +895,7 @@ def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     if user_id == "anonymous":
         click.echo(
             click.style(
-                "👤 Connected as anonymous, sir. No credentials were presented.",
+                "👤 Connected as anonymous. No credentials were presented.",
                 fg="yellow",
             ),
             color=ctx.colour,

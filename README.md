@@ -2,10 +2,10 @@
 
 [![CI](https://github.com/mrsixw/jeeves/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsixw/jeeves/actions/workflows/ci.yml)
 
-**Your Jenkins CI/CD butler.** Jeeves handles your Jenkins affairs with the bearing and discretion of P.G. Wodehouse's most celebrated manservant.
+**Your Jenkins CI/CD butler.** Inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality.
 
-> *"Jeeves," I said, "it just occurred to me — is the nightly build passing?"*
-> *"Certainly, sir. Jenkins is in fine form. All pipelines are green."*
+> *"Jeeves — is the nightly build passing?"*
+> *"Certainly. Jenkins is in fine form. All pipelines are green."*
 
 ## Commands
 
