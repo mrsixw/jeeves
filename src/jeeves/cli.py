@@ -861,7 +861,17 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         raw_labels = [
             lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
         ]
-        labels = ", ".join(lbl for lbl in raw_labels if lbl != display_name)
+        label_parts = []
+        for lbl in raw_labels:
+            if lbl == display_name:
+                continue
+            linked = _hyperlink(lbl, f"{client._base}/label/{lbl}/", ctx.colour)
+            if ctx.colour and ctx.seasonal_colours:
+                linked = apply_seasonal_colour(
+                    linked, idx, calendar=ctx.seasonal_calendar
+                )
+            label_parts.append(linked)
+        labels = ", ".join(label_parts)
         rows.append([name, status, exec_cell, labels])
     click.echo(
         tabulate(
