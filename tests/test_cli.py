@@ -174,9 +174,9 @@ def test_jobs_shows_roster(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "jobs",
-        lambda self, folder=None: [{"name": "deploy-prod", "color": "blue"}],
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
     assert result.exit_code == 0
     assert "deploy-prod" in result.output
     assert "roster" in result.output
@@ -186,14 +186,14 @@ def test_jobs_shows_status_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "jobs",
-        lambda self, folder=None: [
+        lambda self, folder=None, depth=0: [
             {"name": "a", "color": "blue"},
             {"name": "b", "color": "red"},
             {"name": "c", "color": "yellow"},
             {"name": "d", "color": "grey"},
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
     assert result.exit_code == 0
     assert "passed" in result.output
     assert "failed" in result.output
@@ -205,21 +205,64 @@ def test_jobs_shows_folder_icon(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "jobs",
-        lambda self, folder=None: [
+        lambda self, folder=None, depth=0: [
             {
                 "name": "my-folder",
                 "_class": "com.cloudbees.hudson.plugins.folder.Folder",
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
     assert result.exit_code == 0
     assert "my-folder" in result.output
     assert "folder" in result.output
 
 
+def test_jobs_shows_weather_column(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "healthy",
+                "color": "blue",
+                "healthReport": [{"score": 90}],
+            },
+            {
+                "name": "sick",
+                "color": "red",
+                "healthReport": [{"score": 10}],
+            },
+            {
+                "name": "no-report",
+                "color": "grey",
+                "healthReport": [],
+            },
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    assert result.exit_code == 0
+    assert "Weather" in result.output
+    assert "sunny" in result.output
+    assert "stormy" in result.output
+    assert "—" in result.output
+
+
+def test_jobs_no_weather_skips_column(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "x", "color": "blue"}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "Weather" not in result.output
+
+
 def test_jobs_empty_shows_butler_message(monkeypatch):
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None: [])
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
+    )
     result = _invoke("--no-colour", "--no-update-check", "jobs")
     assert result.exit_code == 0
     assert "bare" in result.output or "positions" in result.output

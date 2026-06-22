@@ -352,6 +352,14 @@ _JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
 
 _FOLDER_CLASS_FRAGMENTS = ("Folder", "MultiBranch", "OrganizationFolder")
 
+_WEATHER_MAP: list[tuple[int, str, str, str]] = [
+    (80, "green", "☀️", "sunny"),
+    (60, "yellow", "🌤️", "fair"),
+    (40, "yellow", "☁️", "cloudy"),
+    (20, 208, "🌧️", "rainy"),
+    (0, "red", "⛈️", "stormy"),
+]
+
 
 def _is_folder(job: dict) -> bool:
     cls = job.get("_class", "")
@@ -364,6 +372,16 @@ def _format_job_status(raw: str, colour: bool) -> str:
     return click.style(text, fg=fg, bold=True) if colour else text
 
 
+def _format_weather(score: int | None, colour: bool) -> str:
+    if score is None:
+        return "—"
+    for threshold, fg, emoji, label in _WEATHER_MAP:
+        if score >= threshold:
+            text = f"{emoji} {label}"
+            return click.style(text, fg=fg, bold=True) if colour else text
+    return "—"
+
+
 @main.command()
 @_url_opt
 @_user_opt
@@ -371,14 +389,27 @@ def _format_job_status(raw: str, colour: bool) -> str:
 @click.option(
     "--folder", default=None, metavar="NAME", help="Limit to a Jenkins folder."
 )
+@click.option(
+    "--no-weather",
+    "no_weather",
+    is_flag=True,
+    default=False,
+    help="Skip build health (weather) column; faster on large instances.",
+)
 @click.pass_obj
 def jobs(
-    ctx: _Ctx, url: str | None, user: str | None, token: str | None, folder: str | None
+    ctx: _Ctx,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+    folder: str | None,
+    no_weather: bool,
 ) -> None:
     """List all Jenkins jobs."""
     client = _make_client(ctx, url, user, token)
+    depth = 0 if no_weather else 1
     try:
-        job_list = client.jobs(folder=folder)
+        job_list = client.jobs(folder=folder, depth=depth)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
@@ -400,20 +431,26 @@ def jobs(
         if _is_folder(j):
             type_icon = "📁"
             status_cell = click.style("folder", fg="cyan") if ctx.colour else "folder"
+            weather_cell = "—"
         else:
             type_icon = ""
             raw = j.get("color", "grey")
             status_cell = _format_job_status(raw, ctx.colour)
+            reports = j.get("healthReport") or []
+            score = reports[0].get("score") if reports else None
+            weather_cell = _format_weather(score, ctx.colour)
         name_cell = f"{type_icon} {name}".strip() if type_icon else name
         if ctx.colour and ctx.seasonal_colours:
             name_cell = apply_seasonal_colour(
                 name_cell, idx, calendar=ctx.seasonal_calendar
             )
-        rows.append([name_cell, status_cell])
+        row = [name_cell, status_cell]
+        if not no_weather:
+            row.append(weather_cell)
+        rows.append(row)
+    headers = ["Job", "Status"] + ([] if no_weather else ["Weather"])
     click.echo(
-        tabulate(
-            rows, headers=["Job", "Status"], tablefmt="simple", disable_numparse=True
-        ),
+        tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True),
         color=ctx.colour,
     )
 

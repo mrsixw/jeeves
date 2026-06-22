@@ -38,10 +38,10 @@ class JenkinsClient:
         except requests.exceptions.RequestException as exc:
             raise JenkinsError(str(exc)) from exc
 
-    def _get(self, path: str) -> dict:
+    def _get(self, path: str, params: dict | None = None) -> dict:
         suffix = f"/{path.strip('/')}" if path else ""
         url = f"{self._base}{suffix}/api/json"
-        return self._request("GET", url, timeout=10).json()
+        return self._request("GET", url, params=params, timeout=10).json()
 
     def _fetch_crumb(self) -> None:
         """Fetch the CSRF crumb and apply it to session headers.
@@ -71,9 +71,10 @@ class JenkinsClient:
     def status(self) -> dict:
         return self._get("")
 
-    def jobs(self, folder: str | None = None) -> list[dict]:
+    def jobs(self, folder: str | None = None, depth: int = 0) -> list[dict]:
         path = _normalize_jenkins_path(folder) if folder else ""
-        return self._get(path).get("jobs", [])
+        params = {"depth": depth} if depth else None
+        return self._get(path, params=params).get("jobs", [])
 
     def build(self, job: str, params: dict | None = None) -> None:
         job_path = _normalize_jenkins_path(job)
