@@ -352,6 +352,13 @@ _JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
 
 _FOLDER_CLASS_FRAGMENTS = ("Folder", "MultiBranch", "OrganizationFolder")
 
+# (class fragment, icon) — first match wins
+_JOB_TYPE_ICONS: list[tuple[str, str]] = [
+    ("WorkflowJob", "🔁"),
+    ("FreeStyleProject", "🔧"),
+    ("MatrixProject", "🔢"),
+]
+
 _WEATHER_MAP: list[tuple[int, str, str, str]] = [
     (80, "green", "☀️", "sunny"),
     (60, "yellow", "🌤️", "fair"),
@@ -364,6 +371,14 @@ _WEATHER_MAP: list[tuple[int, str, str, str]] = [
 def _is_folder(job: dict) -> bool:
     cls = job.get("_class", "")
     return any(f in cls for f in _FOLDER_CLASS_FRAGMENTS)
+
+
+def _job_type_icon(job: dict) -> str:
+    cls = job.get("_class", "")
+    for fragment, icon in _JOB_TYPE_ICONS:
+        if fragment in cls:
+            return icon
+    return "🔨"
 
 
 def _format_job_status(raw: str, colour: bool) -> str:
@@ -382,6 +397,74 @@ def _format_weather(score: int | None, colour: bool) -> str:
     return "—"
 
 
+def _collect_job_rows(
+    client: "JenkinsClient",
+    job_list: list[dict],
+    colour: bool,
+    seasonal_colours: bool,
+    seasonal_calendar: str,
+    no_weather: bool,
+    expand: bool,
+    path_prefix: str,
+    colour_index: list[int],
+) -> list[list]:
+    """Recursively build table rows, expanding folders when expand=True."""
+    rows = []
+    for j in job_list:
+        name = j.get("name", "?")
+        full_path = f"{path_prefix}/{name}" if path_prefix else name
+
+        if _is_folder(j):
+            type_icon = ""
+            folder_label = "📁 folder"
+            status_cell = (
+                click.style(folder_label, fg="cyan") if colour else folder_label
+            )
+            weather_cell = "—"
+        else:
+            type_icon = _job_type_icon(j)
+            raw = j.get("color", "grey")
+            status_cell = _format_job_status(raw, colour)
+            reports = j.get("healthReport") or []
+            score = reports[0].get("score") if reports else None
+            weather_cell = _format_weather(score, colour)
+
+        display_name = f"{type_icon} {full_path}".strip() if type_icon else full_path
+        idx = colour_index[0]
+        colour_index[0] += 1
+        if colour and seasonal_colours:
+            display_name = apply_seasonal_colour(
+                display_name, idx, calendar=seasonal_calendar
+            )
+
+        row = [display_name, status_cell]
+        if not no_weather:
+            row.append(weather_cell)
+        rows.append(row)
+
+        if expand and _is_folder(j):
+            try:
+                depth = 0 if no_weather else 1
+                child_jobs = client.jobs(folder=full_path, depth=depth)
+            except JenkinsError:
+                child_jobs = []
+            rows.extend(
+                _collect_job_rows(
+                    client,
+                    child_jobs,
+                    colour,
+                    seasonal_colours,
+                    seasonal_calendar,
+                    no_weather,
+                    expand,
+                    full_path,
+                    colour_index,
+                )
+            )
+
+    return rows
+
+
 @main.command()
 @_url_opt
 @_user_opt
@@ -396,6 +479,13 @@ def _format_weather(score: int | None, colour: bool) -> str:
     default=False,
     help="Skip build health (weather) column; faster on large instances.",
 )
+@click.option(
+    "--expand",
+    "expand",
+    is_flag=True,
+    default=False,
+    help="Recursively expand folders to show all descendant jobs.",
+)
 @click.pass_obj
 def jobs(
     ctx: _Ctx,
@@ -404,6 +494,7 @@ def jobs(
     token: str | None,
     folder: str | None,
     no_weather: bool,
+    expand: bool,
 ) -> None:
     """List all Jenkins jobs."""
     client = _make_client(ctx, url, user, token)
@@ -425,29 +516,17 @@ def jobs(
         click.style("📋 Allow me to present the staff roster, sir.", fg="cyan"),
         color=ctx.colour,
     )
-    rows = []
-    for idx, j in enumerate(job_list):
-        name = j.get("name", "?")
-        if _is_folder(j):
-            type_icon = "📁"
-            status_cell = click.style("folder", fg="cyan") if ctx.colour else "folder"
-            weather_cell = "—"
-        else:
-            type_icon = ""
-            raw = j.get("color", "grey")
-            status_cell = _format_job_status(raw, ctx.colour)
-            reports = j.get("healthReport") or []
-            score = reports[0].get("score") if reports else None
-            weather_cell = _format_weather(score, ctx.colour)
-        name_cell = f"{type_icon} {name}".strip() if type_icon else name
-        if ctx.colour and ctx.seasonal_colours:
-            name_cell = apply_seasonal_colour(
-                name_cell, idx, calendar=ctx.seasonal_calendar
-            )
-        row = [name_cell, status_cell]
-        if not no_weather:
-            row.append(weather_cell)
-        rows.append(row)
+    rows = _collect_job_rows(
+        client,
+        job_list,
+        ctx.colour,
+        ctx.seasonal_colours,
+        ctx.seasonal_calendar,
+        no_weather,
+        expand,
+        path_prefix=folder or "",
+        colour_index=[0],
+    )
     headers = ["Job", "Status"] + ([] if no_weather else ["Weather"])
     click.echo(
         tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True),
