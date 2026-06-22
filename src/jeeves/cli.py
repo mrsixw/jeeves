@@ -415,21 +415,18 @@ def _collect_job_rows(
         full_path = f"{path_prefix}/{name}" if path_prefix else name
 
         if _is_folder(j):
-            type_icon = ""
-            folder_label = "📁 folder"
-            status_cell = (
-                click.style(folder_label, fg="cyan") if colour else folder_label
-            )
-            weather_cell = "—"
+            type_cell = click.style("📁 folder", fg="cyan") if colour else "📁 folder"
+            status_cell = "N/A"
+            weather_cell = "N/A"
         else:
-            type_icon = _job_type_icon(j)
+            type_cell = _job_type_icon(j)
             raw = j.get("color", "grey")
             status_cell = _format_job_status(raw, colour)
             reports = j.get("healthReport") or []
             score = reports[0].get("score") if reports else None
             weather_cell = _format_weather(score, colour)
 
-        display_name = f"{type_icon} {full_path}".strip() if type_icon else full_path
+        display_name = full_path
         idx = colour_index[0]
         colour_index[0] += 1
         if colour and seasonal_colours:
@@ -437,7 +434,7 @@ def _collect_job_rows(
                 display_name, idx, calendar=seasonal_calendar
             )
 
-        row = [display_name, status_cell]
+        row = [display_name, type_cell, status_cell]
         if not no_weather:
             row.append(weather_cell)
         rows.append(row)
@@ -527,7 +524,7 @@ def jobs(
         path_prefix=folder or "",
         colour_index=[0],
     )
-    headers = ["Job", "Status"] + ([] if no_weather else ["Weather"])
+    headers = ["Job", "Type", "Status"] + ([] if no_weather else ["Weather"])
     click.echo(
         tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True),
         color=ctx.colour,
