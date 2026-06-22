@@ -16,7 +16,7 @@ import click
 from tabulate import tabulate
 
 from .config import get_jenkins_config, load_config, show_config, write_default_config
-from .jenkins import JenkinsClient, JenkinsError
+from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import check_for_update
@@ -364,6 +364,17 @@ _JOB_TYPE_FALLBACK = ("🔨", "job")
 
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[a-zA-Z]|\]8;;.*?\x1b\\|\]8;;.*?\x07)")
 
+_OSC8_OPEN = "\x1b]8;;{url}\x1b\\"
+_OSC8_CLOSE = "\x1b]8;;\x1b\\"
+
+
+def _hyperlink(text: str, url: str, colour: bool) -> str:
+    """Wrap text in an OSC 8 terminal hyperlink when colour output is active."""
+    if not colour:
+        return text
+    return f"{_OSC8_OPEN.format(url=url)}{text}{_OSC8_CLOSE}"
+
+
 _WEATHER_MAP: list[tuple[int, str, str, str]] = [
     (80, "green", "☀️", "sunny"),
     (60, "yellow", "🌤️", "fair"),
@@ -453,6 +464,7 @@ def _collect_job_rows(
     expand: bool,
     path_prefix: str,
     colour_index: list[int],
+    base_url: str = "",
 ) -> list[list]:
     """Recursively build table rows, expanding folders when expand=True."""
     rows = []
@@ -479,6 +491,9 @@ def _collect_job_rows(
             display_name = apply_seasonal_colour(
                 display_name, idx, calendar=seasonal_calendar
             )
+        if base_url:
+            job_url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
+            display_name = _hyperlink(display_name, job_url, colour)
 
         row = [display_name, type_cell, status_cell]
         if not no_weather:
@@ -502,6 +517,7 @@ def _collect_job_rows(
                     expand,
                     full_path,
                     colour_index,
+                    base_url,
                 )
             )
 
@@ -582,6 +598,7 @@ def jobs(
         expand,
         path_prefix=folder or "",
         colour_index=[0],
+        base_url=client._base,
     )
     headers = ["Job", "Type", "Status"] + ([] if no_weather else ["Weather"])
 
@@ -726,9 +743,14 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     )
     rows = []
     for idx, item in enumerate(items):
-        task = item.get("task", {}).get("name", "?")
+        task_name = item.get("task", {}).get("name", "?")
+        task_url = item.get("task", {}).get("url") or (
+            f"{client._base}/{_normalize_jenkins_path(task_name)}"
+        )
+        task = task_name
         if ctx.colour and ctx.seasonal_colours:
             task = apply_seasonal_colour(task, idx, calendar=ctx.seasonal_calendar)
+        task = _hyperlink(task, task_url, ctx.colour)
         why = item.get("why", "")
         is_stuck = item.get("stuck", False)
         if ctx.colour:
@@ -822,9 +844,14 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     click.echo(click.style("🏠 The household staff, sir.", fg="cyan"), color=ctx.colour)
     rows = []
     for idx, n in enumerate(node_list):
-        name = n.get("displayName", "?")
+        display_name = n.get("displayName", "?")
+        _built_in = {"master", "Built-In Node"}
+        url_name = "(built-in)" if display_name in _built_in else display_name
+        node_url = f"{client._base}/computer/{url_name}/"
+        name = display_name
         if ctx.colour and ctx.seasonal_colours:
             name = apply_seasonal_colour(name, idx, calendar=ctx.seasonal_calendar)
+        name = _hyperlink(name, node_url, ctx.colour)
         is_offline = n.get("offline", False)
         if ctx.colour:
             status = (

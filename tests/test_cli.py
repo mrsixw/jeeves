@@ -2,7 +2,7 @@ from click.testing import CliRunner
 
 from jeeves import cli as cli_mod
 from jeeves import jenkins as jenkins_mod
-from jeeves.cli import main
+from jeeves.cli import _hyperlink, main
 from jeeves.jenkins import JenkinsError
 
 
@@ -437,6 +437,88 @@ def test_jobs_empty_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "jobs")
     assert result.exit_code == 0
     assert "bare" in result.output or "positions" in result.output
+
+
+# ── hyperlinks ────────────────────────────────────────────────────────────────
+
+
+def test_hyperlink_helper_colour():
+    result = _hyperlink("my-job", "http://jenkins/job/my-job", colour=True)
+    assert "\x1b]8;;" in result
+    assert "http://jenkins/job/my-job" in result
+    assert "my-job" in result
+
+
+def test_hyperlink_helper_no_colour():
+    result = _hyperlink("my-job", "http://jenkins/job/my-job", colour=False)
+    assert result == "my-job"
+
+
+def test_jobs_hyperlinks_job_url(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke(
+        "--no-update-check",
+        "jobs",
+        "--url",
+        "http://jenkins.example.com",
+        "--no-weather",
+        color=True,
+    )
+    assert result.exit_code == 0
+    assert "http://jenkins.example.com" in result.output
+    assert "deploy-prod" in result.output
+
+
+def test_jobs_no_colour_no_hyperlinks(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "\x1b]8;;" not in result.output
+
+
+def test_queue_hyperlinks_task_url(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "queue",
+        lambda self: [
+            {
+                "why": "waiting",
+                "stuck": False,
+                "task": {
+                    "name": "deploy",
+                    "url": "http://jenkins.example.com/job/deploy/",
+                },
+            }
+        ],
+    )
+    result = _invoke("--no-update-check", "queue", color=True)
+    assert result.exit_code == 0
+    assert "http://jenkins.example.com/job/deploy/" in result.output
+
+
+def test_nodes_hyperlinks_node_url(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+    )
+    result = _invoke(
+        "--no-update-check",
+        "nodes",
+        "--url",
+        "http://jenkins.example.com",
+        color=True,
+    )
+    assert result.exit_code == 0
+    assert "http://jenkins.example.com/computer/agent1/" in result.output
 
 
 # ── build ─────────────────────────────────────────────────────────────────────
