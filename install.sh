@@ -2,8 +2,8 @@
 
 set -e
 
-REPO="mrsixw/five-clis"
-BINARY_NAME="five-clis"
+REPO="mrsixw/jeeves"
+BINARY_NAME="jeeves"
 INSTALL_DIR="${HOME}/.local/bin"
 EXECUTABLE_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 MAN_DIR="${HOME}/.local/share/man/man1"
@@ -17,7 +17,7 @@ YELLOW="\033[33m"
 BLUE="\033[34m"
 RESET="\033[0m"
 
-echo -e "${BOLD}${BLUE}🍔 Firing up five-clis...${RESET}"
+echo -e "${BOLD}${BLUE}🍔 Firing up jeeves...${RESET}"
 
 echo -e "${YELLOW}Finding the latest version...${RESET}"
 LATEST_RELEASE_JSON=$(curl -sf "https://api.github.com/repos/${REPO}/releases/latest") || {
@@ -59,29 +59,29 @@ echo -e "${YELLOW}Initializing default configuration...${RESET}"
 
 echo -e "${YELLOW}Installing man page...${RESET}"
 mkdir -p "${MAN_DIR}"
-if curl -sfL "${RELEASE_BASE_URL}/five-clis.1.gz" -o "${MAN_DIR}/five-clis.1.gz"; then
-    echo -e "${GREEN}📖 Man page installed. Run: ${BOLD}man five-clis${RESET}"
+if curl -sfL "${RELEASE_BASE_URL}/jeeves.1.gz" -o "${MAN_DIR}/jeeves.1.gz"; then
+    echo -e "${GREEN}📖 Man page installed. Run: ${BOLD}man jeeves${RESET}"
 else
     echo -e "${YELLOW}⚠️  Could not install man page (non-fatal).${RESET}"
 fi
 
 echo -e "${YELLOW}Installing shell completions...${RESET}"
 mkdir -p "${BASH_COMPLETION_DIR}"
-if curl -sfL "${RELEASE_BASE_URL}/five-clis.bash" -o "${BASH_COMPLETION_DIR}/five-clis"; then
+if curl -sfL "${RELEASE_BASE_URL}/jeeves.bash" -o "${BASH_COMPLETION_DIR}/jeeves"; then
     echo -e "${GREEN}✅ Bash completion installed.${RESET}"
 else
     echo -e "${YELLOW}⚠️  Could not install bash completion (non-fatal).${RESET}"
 fi
 
 mkdir -p "${ZSH_COMPLETION_DIR}"
-if curl -sfL "${RELEASE_BASE_URL}/_five-clis" -o "${ZSH_COMPLETION_DIR}/_five-clis"; then
+if curl -sfL "${RELEASE_BASE_URL}/_jeeves" -o "${ZSH_COMPLETION_DIR}/_jeeves"; then
     echo -e "${GREEN}✅ Zsh completion installed.${RESET}"
 else
     echo -e "${YELLOW}⚠️  Could not install zsh completion (non-fatal).${RESET}"
 fi
 
 mkdir -p "${FISH_COMPLETION_DIR}"
-if curl -sfL "${RELEASE_BASE_URL}/five-clis.fish" -o "${FISH_COMPLETION_DIR}/five-clis.fish"; then
+if curl -sfL "${RELEASE_BASE_URL}/jeeves.fish" -o "${FISH_COMPLETION_DIR}/jeeves.fish"; then
     echo -e "${GREEN}✅ Fish completion installed.${RESET}"
 else
     echo -e "${YELLOW}⚠️  Could not install fish completion (non-fatal).${RESET}"

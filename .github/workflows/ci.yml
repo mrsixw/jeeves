@@ -108,8 +108,8 @@ jobs:
 
       - name: Verify man page
         run: |
-          test -f man1/five-clis.1.gz
-          man -l man1/five-clis.1.gz | head -1 | grep -q "five-clis"
+          test -f man1/jeeves.1.gz
+          man -l man1/jeeves.1.gz | head -1 | grep -q "jeeves"
 
   completions:
     runs-on: ubuntu-latest
@@ -136,15 +136,15 @@ jobs:
 
       - name: Verify completion scripts exist
         run: |
-          test -f completions/five-clis.bash
-          test -f completions/_five-clis
-          test -f completions/five-clis.fish
+          test -f completions/jeeves.bash
+          test -f completions/_jeeves
+          test -f completions/jeeves.fish
 
       - name: Verify --completion flag works for all shells
         run: |
-          uv run five-clis --completion bash | grep -q "_FIVE_CLIS_COMPLETE"
-          uv run five-clis --completion zsh | grep -q "_FIVE_CLIS_COMPLETE"
-          uv run five-clis --completion fish | grep -q "_FIVE_CLIS_COMPLETE"
+          uv run jeeves --completion bash | grep -q "_JEEVES_COMPLETE"
+          uv run jeeves --completion zsh | grep -q "_JEEVES_COMPLETE"
+          uv run jeeves --completion fish | grep -q "_JEEVES_COMPLETE"
 
   release:
     if: "github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
@@ -214,4 +214,4 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh | bash
 
       - name: Verify installation
-        run: ~/.local/bin/five-clis --version
+        run: ~/.local/bin/jeeves --version

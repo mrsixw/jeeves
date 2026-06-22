@@ -3,14 +3,14 @@ from pathlib import Path
 
 from .xdg import get_state_dir
 
-_LOG_FILENAME = "fiveclis.log"
+_LOG_FILENAME = "jeeves.log"
 
 
 def _get_log_path() -> Path:
     return get_state_dir() / _LOG_FILENAME
 
 
-logger = logging.getLogger("fiveclis")
+logger = logging.getLogger("jeeves")
 
 
 def configure() -> None:

@@ -11,8 +11,8 @@ import requests
 from .logger import logger
 from .xdg import get_cache_dir
 
-_UPDATE_CHECK_REPO = "mrsixw/five-clis"
-_PACKAGE_NAME = "fiveclis"
+_UPDATE_CHECK_REPO = "mrsixw/jeeves"
+_PACKAGE_NAME = "jeeves"
 
 _CACHE_DIR = get_cache_dir()
 _CACHE_TTL_SECONDS = 86400  # 24 hours

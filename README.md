@@ -1,42 +1,39 @@
-# 🍔 five-clis
+# 🎩 jeeves
 
-[![CI](https://github.com/mrsixw/five-clis/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsixw/five-clis/actions/workflows/ci.yml)
+[![CI](https://github.com/mrsixw/jeeves/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsixw/jeeves/actions/workflows/ci.yml)
 
-**A batteries-included Python CLI template.** Named after Five Guys — burgers, shakes & fries → five CLI essentials.
+**Your Jenkins CI/CD butler.** Jeeves handles your Jenkins affairs with the bearing and discretion of P.G. Wodehouse's most celebrated manservant.
 
-Click **Use this template** to scaffold a new project with everything wired up and working from day one.
+> *"Jeeves," I said, "it just occurred to me — is the nightly build passing?"*
+> *"Certainly, sir. Jenkins is in fine form. All pipelines are green."*
 
-## What's included
+## Commands
 
-| Essential | Description |
-| --------- | ----------- |
-| **Click** | Fully-wired entrypoint with `--version`, `--help`, `--completion` |
-| **Shell completions** | bash, zsh, fish — generated and validated in CI |
-| **Config file** | TOML config with XDG paths, `--init-config`, `--show-config` |
-| **Themes** | `default`, `dark`, `light`, `mono`, `rainbow` — plus the full seasonal colour system |
-| **Seasonal colours** | Date-driven ANSI palettes: western, jewish, islamic, hindu, sikh, east-asian |
-| **Caching** | Generic TTL disk cache with atomic writes |
-| **Auto-update** | GitHub release update checker with 24h cache |
-| **Logging** | File logging to XDG state dir |
-| **CI** | GitHub Actions: test, lint, build, spell, docs-lint, man, completions, release |
-| **Release pipeline** | `git-mkver` version bumping, shiv binary, man page, `gh release create` |
-| **install.sh** | One-liner install with binary + man page + shell completions |
+| Command | Description |
+| ------- | ----------- |
+| `jeeves status` | Check Jenkins server health |
+| `jeeves jobs [--folder NAME]` | List all jobs and their status |
+| `jeeves build JOB [--param K=V]` | Trigger a build |
+| `jeeves log JOB [--build N]` | Show build console output |
+| `jeeves queue` | Show the build queue |
+| `jeeves cancel JOB --build N` | Cancel a running build |
+| `jeeves nodes` | List build nodes (agents) |
 
 ## Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/mrsixw/five-clis/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/mrsixw/jeeves/main/install.sh | bash
 ```
 
 ## Quick start
 
 ```bash
-five-clis --help
-five-clis --theme rainbow
-five-clis --name Alice
-five-clis --init-config
-five-clis --show-config
-eval "$(five-clis --completion bash)"
+jeeves --help
+jeeves --theme rainbow
+jeeves --name Alice
+jeeves --init-config
+jeeves --show-config
+eval "$(jeeves --completion bash)"
 ```
 
 ## Using this template

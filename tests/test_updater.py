@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests_mock as req_mock
 
-from fiveclis import updater as upd
+from jeeves import updater as upd
 
 
 def test_parse_version_tuple_basic():

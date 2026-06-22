@@ -1,6 +1,6 @@
 import datetime
 
-from fiveclis.ui import (
+from jeeves.ui import (
     HOLI_RAINBOW,
     PRIDE_RAINBOW,
     SEASONAL_PALETTES,
@@ -88,7 +88,7 @@ def test_apply_seasonal_colour_unknown_calendar():
 def test_apply_seasonal_colour_january(monkeypatch):
     fixed = datetime.date(2026, 1, 15)
     monkeypatch.setattr(
-        "fiveclis.ui.datetime.date",
+        "jeeves.ui.datetime.date",
         type("MockDate", (), {"today": staticmethod(lambda: fixed)}),
     )
     result = apply_seasonal_colour("hello", 0, calendar="western")
@@ -98,7 +98,7 @@ def test_apply_seasonal_colour_january(monkeypatch):
 def test_apply_seasonal_colour_june_cycles(monkeypatch):
     fixed = datetime.date(2026, 6, 15)
     monkeypatch.setattr(
-        "fiveclis.ui.datetime.date",
+        "jeeves.ui.datetime.date",
         type("MockDate", (), {"today": staticmethod(lambda: fixed)}),
     )
     r0 = apply_seasonal_colour("a", 0, calendar="western")

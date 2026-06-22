@@ -1,10 +1,10 @@
-# Contributing to five-clis
+# Contributing to jeeves
 
 ## Development setup
 
 ```bash
-git clone https://github.com/mrsixw/five-clis
-cd five-clis
+git clone https://github.com/mrsixw/jeeves
+cd jeeves
 uv sync --extra dev
 ```
 

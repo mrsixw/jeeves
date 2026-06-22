@@ -4,7 +4,7 @@
 
 If you see no colours, check:
 
-- Are you using `--no-colour` or `FIVE_CLIS_NO_COLOUR=1`?
+- Are you using `--no-colour` or `JEEVES_NO_COLOUR=1`?
 - Does your terminal support ANSI colours?
 - Try `--theme default` explicitly.
 
@@ -16,14 +16,14 @@ If you see no colours, check:
 
 ## Config file not found
 
-Run `five-clis --init-config` to create a default config at `~/.config/fiveclis/config.toml`.
+Run `jeeves --init-config` to create a default config at `~/.config/jeeves/config.toml`.
 
-Use `five-clis --show-config` to see which config file is being used and what keys are set.
+Use `jeeves --show-config` to see which config file is being used and what keys are set.
 
 ## Update check fails silently
 
 The update check is non-fatal. If it fails (no network, GitHub rate limit),
-five-clis continues normally. Pass `--no-update-check` to skip it entirely.
+jeeves continues normally. Pass `--no-update-check` to skip it entirely.
 
 ## Command not found after install
 

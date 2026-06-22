@@ -7,8 +7,8 @@
 Set the terminal colour theme. Choices: `default`, `dark`, `light`, `mono`, `rainbow`.
 
 ```bash
-five-clis --theme rainbow
-five-clis --theme mono      # no colour
+jeeves --theme rainbow
+jeeves --theme mono      # no colour
 ```
 
 Config key: `theme = "default"`
@@ -37,7 +37,7 @@ Config key: `seasonal-calendar = "western"`
 
 ### `--no-colour`
 
-Disable all ANSI colour output. Also honoured via `FIVE_CLIS_NO_COLOUR=1`.
+Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
 
 ## Config options
 
@@ -51,7 +51,7 @@ Print the resolved config and exit.
 
 ### `--init-config`
 
-Write a default config file to `~/.config/fiveclis/config.toml` and exit.
+Write a default config file to `~/.config/jeeves/config.toml` and exit.
 
 ## Caching
 
@@ -74,14 +74,14 @@ Config key: `cache-ttl = "300"`
 Print the shell completion script and exit. Eval in your shell config:
 
 ```bash
-eval "$(five-clis --completion bash)"
+eval "$(jeeves --completion bash)"
 ```
 
 ## Other
 
 ### `--no-update-check`
 
-Disable the automatic update check. Also honoured via `FIVE_CLIS_NO_UPDATE_CHECK=1`.
+Disable the automatic update check. Also honoured via `JEEVES_NO_UPDATE_CHECK=1`.
 
 Config key: `no-update-check = false`
 

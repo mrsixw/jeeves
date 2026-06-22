@@ -1,6 +1,6 @@
 import pytest
 
-from fiveclis.config import (
+from jeeves.config import (
     _DEFAULT_CONFIG_CONTENT,
     load_config,
     show_config,
@@ -29,12 +29,12 @@ def test_load_config_invalid_toml_raises(tmp_path):
 
 
 def test_write_default_config_creates_file(tmp_path, monkeypatch):
-    from fiveclis import xdg
+    from jeeves import xdg
 
-    monkeypatch.setattr(xdg, "get_config_dir", lambda: tmp_path / "fiveclis")
-    from fiveclis import config as cfg_mod
+    monkeypatch.setattr(xdg, "get_config_dir", lambda: tmp_path / "jeeves")
+    from jeeves import config as cfg_mod
 
-    monkeypatch.setattr(cfg_mod, "get_config_dir", lambda: tmp_path / "fiveclis")
+    monkeypatch.setattr(cfg_mod, "get_config_dir", lambda: tmp_path / "jeeves")
     path = write_default_config()
     assert path.exists()
     assert "theme" in path.read_text()
