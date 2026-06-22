@@ -247,6 +247,120 @@ def test_jobs_shows_type_icons(monkeypatch):
     assert "🔨" in result.output
 
 
+def test_jobs_type_workflow_job(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "pipe",
+                "color": "blue",
+                "_class": "org.jenkinsci.plugins.workflow.job.WorkflowJob",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "🔁" in result.output
+    assert "pipeline" in result.output
+
+
+def test_jobs_type_freestyle_project(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "free",
+                "color": "blue",
+                "_class": "hudson.model.FreeStyleProject",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "🔧" in result.output
+    assert "freestyle" in result.output
+
+
+def test_jobs_type_matrix_project(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "matrix",
+                "color": "blue",
+                "_class": "hudson.matrix.MatrixProject",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "🔢" in result.output
+    assert "matrix" in result.output
+
+
+def test_jobs_type_unknown_fallback(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "mystery",
+                "color": "blue",
+                "_class": "com.example.SomeUnknownJobType",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "🔨" in result.output
+    assert "job" in result.output
+
+
+def test_jobs_type_folder_icon(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {
+                "name": "my-folder",
+                "_class": "com.cloudbees.hudson.plugins.folder.Folder",
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "📁" in result.output
+    assert "folder" in result.output
+
+
+def test_jobs_type_key_flag(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--type-key")
+    assert result.exit_code == 0
+    assert "🔁" in result.output
+    assert "🔧" in result.output
+    assert "🔢" in result.output
+    assert "🔨" in result.output
+    assert "📁" in result.output
+    assert "pipeline" in result.output
+
+
+def test_swatch_shows_iconography(monkeypatch):
+    result = _invoke("--no-colour", "--no-update-check", "swatch")
+    assert result.exit_code == 0
+    assert "🔁" in result.output
+    assert "🔧" in result.output
+    assert "☀️" in result.output
+    assert "⛈️" in result.output
+
+
 def test_jobs_expand_recurses_into_folders(monkeypatch):
     def _mock_jobs(self, folder=None, depth=0):
         if folder is None:
