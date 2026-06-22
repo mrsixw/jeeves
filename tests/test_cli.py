@@ -632,6 +632,68 @@ def test_nodes_empty_shows_butler_message(monkeypatch):
     assert "absented" in result.output or "notice" in result.output
 
 
+def test_nodes_shows_labels(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [
+            {
+                "displayName": "agent-1",
+                "offline": False,
+                "numExecutors": 4,
+                "assignedLabels": [
+                    {"name": "agent-1"},
+                    {"name": "linux"},
+                    {"name": "docker"},
+                ],
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "Labels" in result.output
+    assert "linux" in result.output
+    assert "docker" in result.output
+
+
+def test_nodes_filters_own_name_from_labels(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [
+            {
+                "displayName": "build-node",
+                "offline": False,
+                "numExecutors": 2,
+                "assignedLabels": [{"name": "build-node"}, {"name": "java"}],
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "java" in result.output
+    # node name appears once (Node column) but not again in Labels column
+    assert result.output.count("build-node") == 1
+
+
+def test_nodes_empty_labels_renders_blank(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [
+            {
+                "displayName": "agent-1",
+                "offline": False,
+                "numExecutors": 2,
+                "assignedLabels": [{"name": "agent-1"}],
+            }
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "Labels" in result.output
+
+
 # ── whoami ────────────────────────────────────────────────────────────────────
 
 
