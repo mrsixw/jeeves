@@ -7,6 +7,8 @@ utmost discretion and efficiency.
 from __future__ import annotations
 
 import random
+import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 
@@ -352,6 +354,16 @@ _JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
 
 _FOLDER_CLASS_FRAGMENTS = ("Folder", "MultiBranch", "OrganizationFolder")
 
+# (class fragment, icon, label) — first match wins
+_JOB_TYPE_MAP: list[tuple[str, str, str]] = [
+    ("WorkflowJob", "🔁", "pipeline"),
+    ("FreeStyleProject", "🔧", "freestyle"),
+    ("MatrixProject", "🔢", "matrix"),
+]
+_JOB_TYPE_FALLBACK = ("🔨", "job")
+
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[a-zA-Z]|\]8;;.*?\x1b\\|\]8;;.*?\x07)")
+
 _WEATHER_MAP: list[tuple[int, str, str, str]] = [
     (80, "green", "☀️", "sunny"),
     (60, "yellow", "🌤️", "fair"),
@@ -364,6 +376,55 @@ _WEATHER_MAP: list[tuple[int, str, str, str]] = [
 def _is_folder(job: dict) -> bool:
     cls = job.get("_class", "")
     return any(f in cls for f in _FOLDER_CLASS_FRAGMENTS)
+
+
+def _job_type_cell(job: dict) -> str:
+    cls = job.get("_class", "")
+    for fragment, icon, label in _JOB_TYPE_MAP:
+        if fragment in cls:
+            return f"{icon} {label}"
+    icon, label = _JOB_TYPE_FALLBACK
+    return f"{icon} {label}"
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
+
+
+def _compress_type_cells(rows: list[list], col: int) -> list[list]:
+    """Strip label text from Type cells, leaving only the emoji icon."""
+    result = []
+    for row in rows:
+        new_row = list(row)
+        plain = _strip_ansi(new_row[col])
+        first_word = plain.split()[0] if plain.split() else plain
+        if first_word != plain:
+            new_row[col] = new_row[col].replace(plain, first_word, 1)
+        result.append(new_row)
+    return result
+
+
+def _render_type_key() -> str:
+    lines = [click.style("🗝️  Job type reference", fg="cyan", bold=True), ""]
+    entries = (
+        [
+            ("📁 folder", "Jenkins folder or multi-branch project"),
+        ]
+        + [
+            (f"{icon} {label}", f"Jenkins {label} job")
+            for _, icon, label in _JOB_TYPE_MAP
+        ]
+        + [
+            (
+                f"{_JOB_TYPE_FALLBACK[0]} {_JOB_TYPE_FALLBACK[1]}",
+                "Other / unrecognised",
+            ),
+        ]
+    )
+    width = max(len(e) for e, _ in entries)
+    for entry, desc in entries:
+        lines.append(f"  {entry:<{width}}  {desc}")
+    return "\n".join(lines)
 
 
 def _format_job_status(raw: str, colour: bool) -> str:
@@ -382,6 +443,71 @@ def _format_weather(score: int | None, colour: bool) -> str:
     return "—"
 
 
+def _collect_job_rows(
+    client: "JenkinsClient",
+    job_list: list[dict],
+    colour: bool,
+    seasonal_colours: bool,
+    seasonal_calendar: str,
+    no_weather: bool,
+    expand: bool,
+    path_prefix: str,
+    colour_index: list[int],
+) -> list[list]:
+    """Recursively build table rows, expanding folders when expand=True."""
+    rows = []
+    for j in job_list:
+        name = j.get("name", "?")
+        full_path = f"{path_prefix}/{name}" if path_prefix else name
+
+        if _is_folder(j):
+            type_cell = click.style("📁 folder", fg="cyan") if colour else "📁 folder"
+            status_cell = "N/A"
+            weather_cell = "N/A"
+        else:
+            type_cell = _job_type_cell(j)
+            raw = j.get("color", "grey")
+            status_cell = _format_job_status(raw, colour)
+            reports = j.get("healthReport") or []
+            score = reports[0].get("score") if reports else None
+            weather_cell = _format_weather(score, colour)
+
+        display_name = full_path
+        idx = colour_index[0]
+        colour_index[0] += 1
+        if colour and seasonal_colours:
+            display_name = apply_seasonal_colour(
+                display_name, idx, calendar=seasonal_calendar
+            )
+
+        row = [display_name, type_cell, status_cell]
+        if not no_weather:
+            row.append(weather_cell)
+        rows.append(row)
+
+        if expand and _is_folder(j):
+            try:
+                depth = 0 if no_weather else 1
+                child_jobs = client.jobs(folder=full_path, depth=depth)
+            except JenkinsError:
+                child_jobs = []
+            rows.extend(
+                _collect_job_rows(
+                    client,
+                    child_jobs,
+                    colour,
+                    seasonal_colours,
+                    seasonal_calendar,
+                    no_weather,
+                    expand,
+                    full_path,
+                    colour_index,
+                )
+            )
+
+    return rows
+
+
 @main.command()
 @_url_opt
 @_user_opt
@@ -396,6 +522,21 @@ def _format_weather(score: int | None, colour: bool) -> str:
     default=False,
     help="Skip build health (weather) column; faster on large instances.",
 )
+@click.option(
+    "--expand",
+    "expand",
+    is_flag=True,
+    default=False,
+    help="Recursively expand folders to show all descendant jobs.",
+)
+@click.option(
+    "--type-key",
+    "type_key",
+    is_flag=True,
+    default=False,
+    is_eager=True,
+    help="Print the job-type icon reference and exit.",
+)
 @click.pass_obj
 def jobs(
     ctx: _Ctx,
@@ -404,8 +545,14 @@ def jobs(
     token: str | None,
     folder: str | None,
     no_weather: bool,
+    expand: bool,
+    type_key: bool,
 ) -> None:
     """List all Jenkins jobs."""
+    if type_key:
+        click.echo(_render_type_key(), color=ctx.colour)
+        return
+
     client = _make_client(ctx, url, user, token)
     depth = 0 if no_weather else 1
     try:
@@ -425,30 +572,30 @@ def jobs(
         click.style("📋 Allow me to present the staff roster, sir.", fg="cyan"),
         color=ctx.colour,
     )
-    rows = []
-    for idx, j in enumerate(job_list):
-        name = j.get("name", "?")
-        if _is_folder(j):
-            type_icon = "📁"
-            status_cell = click.style("folder", fg="cyan") if ctx.colour else "folder"
-            weather_cell = "—"
-        else:
-            type_icon = ""
-            raw = j.get("color", "grey")
-            status_cell = _format_job_status(raw, ctx.colour)
-            reports = j.get("healthReport") or []
-            score = reports[0].get("score") if reports else None
-            weather_cell = _format_weather(score, ctx.colour)
-        name_cell = f"{type_icon} {name}".strip() if type_icon else name
-        if ctx.colour and ctx.seasonal_colours:
-            name_cell = apply_seasonal_colour(
-                name_cell, idx, calendar=ctx.seasonal_calendar
-            )
-        row = [name_cell, status_cell]
-        if not no_weather:
-            row.append(weather_cell)
-        rows.append(row)
-    headers = ["Job", "Status"] + ([] if no_weather else ["Weather"])
+    rows = _collect_job_rows(
+        client,
+        job_list,
+        ctx.colour,
+        ctx.seasonal_colours,
+        ctx.seasonal_calendar,
+        no_weather,
+        expand,
+        path_prefix=folder or "",
+        colour_index=[0],
+    )
+    headers = ["Job", "Type", "Status"] + ([] if no_weather else ["Weather"])
+
+    if ctx.colour and sys.stdout.isatty():
+        term_width = shutil.get_terminal_size().columns
+        rendered = tabulate(
+            rows, headers=headers, tablefmt="simple", disable_numparse=True
+        )
+        max_width = max(
+            (len(_strip_ansi(line)) for line in rendered.splitlines()), default=0
+        )
+        if max_width > term_width:
+            rows = _compress_type_cells(rows, col=1)
+
     click.echo(
         tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True),
         color=ctx.colour,
@@ -744,3 +891,101 @@ def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
         click.style(f"👤 Authenticated as: {identity}", fg="green"),
         color=ctx.colour,
     )
+
+
+# ── swatch ───────────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.pass_obj
+def swatch(ctx: _Ctx) -> None:
+    """Show colour swatches and iconography reference for the current terminal."""
+    from .ui import HOLI_RAINBOW, PRIDE_RAINBOW, SEASONAL_PALETTES
+
+    colour = ctx.colour
+    lines = [
+        click.style("🎨 jeeves — colour & iconography reference", fg="cyan", bold=True),
+        "",
+    ]
+
+    # ── Job type icons ────────────────────────────────────────────────────────
+    lines.append(click.style("Job types", bold=True))
+    type_entries = (
+        [
+            ("📁 folder", "Jenkins folder or multi-branch project"),
+        ]
+        + [
+            (f"{icon} {label}", f"Jenkins {label} job")
+            for _, icon, label in _JOB_TYPE_MAP
+        ]
+        + [
+            (
+                f"{_JOB_TYPE_FALLBACK[0]} {_JOB_TYPE_FALLBACK[1]}",
+                "Other / unrecognised",
+            ),
+        ]
+    )
+    col_w = max(len(e) for e, _ in type_entries)
+    for entry, desc in type_entries:
+        lines.append(f"  {entry:<{col_w}}  {desc}")
+    lines.append("")
+
+    # ── Build status ─────────────────────────────────────────────────────────
+    lines.append(click.style("Build status", bold=True))
+    for raw, (fg, label, emoji) in _JOB_COLOUR_MAP.items():
+        text = f"{emoji} {label}"
+        cell = click.style(text, fg=fg, bold=True) if colour else text
+        lines.append(f"  {cell}  ({raw})")
+    lines.append("")
+
+    # ── Weather / health ─────────────────────────────────────────────────────
+    lines.append(click.style("Build health (weather)", bold=True))
+    weather_entries = [
+        (80, "100", "green", "☀️", "sunny"),
+        (60, "79", "yellow", "🌤️", "fair"),
+        (40, "59", "yellow", "☁️", "cloudy"),
+        (20, "39", 208, "🌧️", "rainy"),
+        (0, "19", "red", "⛈️", "stormy"),
+    ]
+    for lo, hi, fg, emoji, label in weather_entries:
+        text = f"{emoji} {label}"
+        cell = click.style(text, fg=fg, bold=True) if colour else text
+        lines.append(f"  {cell}  score {lo}–{hi}")
+    lines.append("")
+
+    # ── Node status ───────────────────────────────────────────────────────────
+    lines.append(click.style("Node status", bold=True))
+    online = click.style("✅ online", fg="green", bold=True) if colour else "✅ online"
+    offline = click.style("🔴 offline", fg="red", bold=True) if colour else "🔴 offline"
+    lines.append(f"  {online}    {offline}")
+    lines.append("")
+
+    # ── Seasonal colours ─────────────────────────────────────────────────────
+    def _ansi_block(code: str) -> str:
+        return f"{code}████\033[0m"
+
+    lines.append(click.style("Seasonal colours", bold=True))
+    palette_rows = [
+        ("January 🗓️", "purple"),
+        ("Valentine's / Hanami 🌸", "pink"),
+        ("Lunar New Year 🧧", "lny"),
+        ("Rosh Hashanah / Diwali 🪔", "gold"),
+        ("Easter / Mid-Autumn 🎑", "yellow"),
+        ("October / Sukkot 🌿", "orange"),
+        ("December 🎄", "red"),
+        ("Eid / Summer 🌙", "green"),
+        ("Hanukkah / Songkran 💦", "blue"),
+        ("Passover / Vaisakhi 🌾", "spring_green"),
+    ]
+    col_w2 = max(len(label) for label, _ in palette_rows) + 2
+    for label, key in palette_rows:
+        swatch_block = _ansi_block(SEASONAL_PALETTES[key]) if colour else "████"
+        lines.append(f"  {label:<{col_w2}}  {swatch_block}")
+    pride = (
+        "  ".join(_ansi_block(c) for c in PRIDE_RAINBOW) if colour else "pride rainbow"
+    )
+    lines.append(f"  {'Pride Month 🌈 (June)':<{col_w2}}  {pride}")
+    holi = "  ".join(_ansi_block(c) for c in HOLI_RAINBOW) if colour else "holi rainbow"
+    lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
+
+    click.echo("\n".join(lines), color=colour)
