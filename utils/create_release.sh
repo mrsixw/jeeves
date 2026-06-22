@@ -4,7 +4,7 @@ set -euo pipefail
 version="$1"
 tag="v${version}"
 
-gh release create "${tag}" ./jeeves \
+gh release create "${tag}" ./dist/jeeves \
   man1/jeeves.1.gz \
   completions/jeeves.bash \
   completions/_jeeves \
