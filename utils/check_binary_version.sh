@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 VERSION=$(cat VERSION)
-OUTPUT=$(./jeeves --version 2>&1)
+OUTPUT=$(./dist/jeeves --version 2>&1)
 if ! echo "${OUTPUT}" | grep -q "${VERSION}"; then
     echo "Binary version mismatch. Expected: ${VERSION}, got: ${OUTPUT}" >&2
     exit 1

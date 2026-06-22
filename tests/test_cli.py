@@ -128,12 +128,43 @@ def test_status_shows_butler_greeting(monkeypatch):
 
 def test_status_connection_error_shows_butler_error(monkeypatch):
     def _raise(self):
-        raise JenkinsError("connection refused")
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
 
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
     result = _invoke("--no-colour", "--no-update-check", "status")
     assert result.exit_code == 1
-    assert "bother" in result.output + (result.output or "")
+    assert "unreachable" in result.output
+
+
+def test_error_403_shows_credentials_message(monkeypatch):
+    def _raise(self):
+        raise JenkinsError("Jenkins returned 403")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert "403" in result.output
+    assert "credentials" in result.output
+
+
+def test_error_404_shows_not_found_message(monkeypatch):
+    def _raise(self):
+        raise JenkinsError("Jenkins returned 404")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert "404" in result.output
+
+
+def test_error_generic_shows_bother_message(monkeypatch):
+    def _raise(self):
+        raise JenkinsError("something went wrong")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert "bother" in result.output
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────────
@@ -155,7 +186,7 @@ def test_jobs_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None: [])
     result = _invoke("--no-colour", "--no-update-check", "jobs")
     assert result.exit_code == 0
-    assert "unoccupied" in result.output
+    assert "bare" in result.output or "positions" in result.output
 
 
 # ── build ─────────────────────────────────────────────────────────────────────
@@ -204,7 +235,7 @@ def test_queue_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "queue", lambda self: [])
     result = _invoke("--no-colour", "--no-update-check", "queue")
     assert result.exit_code == 0
-    assert "unoccupied" in result.output
+    assert "empty" in result.output or "leisure" in result.output
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────
@@ -240,4 +271,40 @@ def test_nodes_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", lambda self: [])
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
-    assert "unoccupied" in result.output
+    assert "absented" in result.output or "notice" in result.output
+
+
+# ── whoami ────────────────────────────────────────────────────────────────────
+
+
+def test_whoami_authenticated(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "whoami",
+        lambda self: {"id": "alice", "fullName": "Alice Smith"},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 0
+    assert "alice" in result.output
+    assert "Alice Smith" in result.output
+
+
+def test_whoami_anonymous(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "whoami",
+        lambda self: {"id": "anonymous", "fullName": "anonymous"},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 0
+    assert "anonymous" in result.output
+
+
+def test_whoami_error_shows_butler_message(monkeypatch):
+    def _raise(self):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "whoami", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "whoami")
+    assert result.exit_code == 1
+    assert "unreachable" in result.output
