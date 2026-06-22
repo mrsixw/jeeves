@@ -4,19 +4,43 @@ import pytest
 import requests
 import requests_mock as req_mock
 
-from jeeves.jenkins import JenkinsClient, JenkinsError
+from jeeves.jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 
 BASE = "http://jenkins.example.com"
 
 
 @pytest.fixture
 def client() -> JenkinsClient:
-    return JenkinsClient(BASE, "admin", "secret")
+    c = JenkinsClient(BASE, "admin", "secret")
+    c._crumb_fetched = True  # skip crumb in non-crumb tests
+    return c
 
 
 @pytest.fixture
 def anon_client() -> JenkinsClient:
     return JenkinsClient(BASE)
+
+
+# ── _normalize_jenkins_path ──────────────────────────────────────────────────
+
+
+def test_normalize_single_job() -> None:
+    assert _normalize_jenkins_path("my-pipeline") == "job/my-pipeline"
+
+
+def test_normalize_nested_job() -> None:
+    assert _normalize_jenkins_path("folder/my-pipeline") == "job/folder/job/my-pipeline"
+
+
+def test_normalize_deeply_nested() -> None:
+    assert (
+        _normalize_jenkins_path("team/project/deploy")
+        == "job/team/job/project/job/deploy"
+    )
+
+
+def test_normalize_strips_leading_slash() -> None:
+    assert _normalize_jenkins_path("/folder/job") == "job/folder/job/job"
 
 
 # ── status ──────────────────────────────────────────────────────────────────
@@ -70,6 +94,16 @@ def test_jobs_folder(client: JenkinsClient) -> None:
     assert result[0]["name"] == "deploy"
 
 
+def test_jobs_nested_folder(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/myteam/job/backend/api/json",
+            json={"jobs": [{"name": "deploy"}]},
+        )
+        result = client.jobs(folder="myteam/backend")
+    assert result[0]["name"] == "deploy"
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 
@@ -85,11 +119,37 @@ def test_build_with_params(client: JenkinsClient) -> None:
         client.build("my-pipeline", params={"ENV": "prod"})
 
 
+def test_build_params_sent_as_form_body(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        adapter = m.post(f"{BASE}/job/my-pipeline/buildWithParameters", status_code=201)
+        client.build("my-pipeline", params={"ENV": "prod", "BRANCH": "main"})
+    # params must be in the request body, not the query string
+    assert adapter.last_request.qs == {}
+    assert "ENV=prod" in adapter.last_request.body
+    assert "BRANCH=main" in adapter.last_request.body
+
+
 def test_build_http_error_raises(client: JenkinsClient) -> None:
     with req_mock.Mocker() as m:
         m.post(f"{BASE}/job/my-pipeline/build", status_code=404)
         with pytest.raises(JenkinsError, match="404"):
             client.build("my-pipeline")
+
+
+def test_build_connection_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(
+            f"{BASE}/job/my-pipeline/build",
+            exc=requests.ConnectionError("refused"),
+        )
+        with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
+            client.build("my-pipeline")
+
+
+def test_build_nested_job(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/job/team/job/my-pipeline/build", status_code=201)
+        client.build("team/my-pipeline")
 
 
 # ── log ─────────────────────────────────────────────────────────────────────
@@ -116,6 +176,23 @@ def test_log_http_error_raises(client: JenkinsClient) -> None:
         m.get(f"{BASE}/job/my-pipeline/lastBuild/consoleText", status_code=404)
         with pytest.raises(JenkinsError, match="404"):
             client.log("my-pipeline")
+
+
+def test_log_connection_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/consoleText",
+            exc=requests.ConnectionError("refused"),
+        )
+        with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
+            client.log("my-pipeline")
+
+
+def test_log_nested_job(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/team/job/my-pipeline/lastBuild/consoleText", text="ok")
+        text = client.log("team/my-pipeline")
+    assert text == "ok"
 
 
 # ── queue ───────────────────────────────────────────────────────────────────
@@ -156,6 +233,22 @@ def test_cancel_http_error_raises(client: JenkinsClient) -> None:
             client.cancel("my-pipeline", 5)
 
 
+def test_cancel_connection_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(
+            f"{BASE}/job/my-pipeline/5/stop",
+            exc=requests.ConnectionError("refused"),
+        )
+        with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
+            client.cancel("my-pipeline", 5)
+
+
+def test_cancel_nested_job(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/job/team/job/my-pipeline/5/stop", status_code=200)
+        client.cancel("team/my-pipeline", 5)
+
+
 # ── nodes ───────────────────────────────────────────────────────────────────
 
 
@@ -186,3 +279,41 @@ def test_no_auth_client_has_no_session_auth(anon_client: JenkinsClient) -> None:
 
 def test_auth_client_has_session_auth(client: JenkinsClient) -> None:
     assert client._session.auth is not None
+
+
+# ── CSRF crumb ───────────────────────────────────────────────────────────────
+
+
+def test_fetch_crumb_sets_session_header() -> None:
+    fresh = JenkinsClient(BASE, "admin", "secret")
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/crumbIssuer/api/json",
+            json={"crumb": "abc123", "crumbRequestField": "Jenkins-Crumb"},
+        )
+        m.post(f"{BASE}/job/my-pipeline/build", status_code=201)
+        fresh.build("my-pipeline")
+    assert fresh._session.headers.get("Jenkins-Crumb") == "abc123"
+
+
+def test_fetch_crumb_unavailable_silently_ignored() -> None:
+    fresh = JenkinsClient(BASE, "admin", "secret")
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/crumbIssuer/api/json", status_code=404)
+        m.post(f"{BASE}/job/my-pipeline/build", status_code=201)
+        fresh.build("my-pipeline")
+    assert "Jenkins-Crumb" not in fresh._session.headers
+
+
+def test_fetch_crumb_only_called_once() -> None:
+    fresh = JenkinsClient(BASE, "admin", "secret")
+    with req_mock.Mocker() as m:
+        crumb_adapter = m.get(
+            f"{BASE}/crumbIssuer/api/json",
+            json={"crumb": "tok", "crumbRequestField": "Jenkins-Crumb"},
+        )
+        m.post(f"{BASE}/job/my-pipeline/build", status_code=201)
+        m.post(f"{BASE}/job/my-pipeline/5/stop", status_code=200)
+        fresh.build("my-pipeline")
+        fresh.cancel("my-pipeline", 5)
+    assert crumb_adapter.call_count == 1
