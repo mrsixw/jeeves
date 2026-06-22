@@ -9,7 +9,8 @@ SHELL = /bin/bash
 
 build: .venv
 	uv sync --extra build
-	uv run shiv -c jeeves -o jeeves --python '/usr/bin/env python3' --preamble utils/preamble.py .
+	mkdir -p dist
+	uv run shiv -c jeeves -o dist/jeeves --python '/usr/bin/env python3' --preamble utils/preamble.py .
 
 release: build
 
