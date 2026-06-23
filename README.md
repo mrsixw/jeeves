@@ -14,6 +14,9 @@
 | `jeeves status` | Check Jenkins server health |
 | `jeeves jobs [--folder NAME]` | List all jobs and their status |
 | `jeeves build JOB [--param K=V]` | Trigger a build |
+| `jeeves builds JOB [--build N]` | Show last / successful / failed builds |
+| `jeeves rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
+| `jeeves params JOB` | Show a job's build parameters |
 | `jeeves log JOB [--build N]` | Show build console output |
 | `jeeves queue` | Show the build queue |
 | `jeeves cancel JOB --build N` | Cancel a running build |

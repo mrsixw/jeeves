@@ -838,6 +838,216 @@ def test_build_bad_param_format(monkeypatch):
     assert result.exit_code == 1
 
 
+# ── builds ────────────────────────────────────────────────────────────────────
+
+
+def _build_info_mock(monkeypatch, mapping):
+    def _info(self, job, build="lastBuild"):
+        return mapping.get(build)
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "build_info", _info)
+
+
+def test_builds_table(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "lastBuild": {
+                "number": 142,
+                "result": "SUCCESS",
+                "building": False,
+                "timestamp": 0,
+                "duration": 192000,
+                "url": "http://x/142/",
+            },
+            "lastSuccessfulBuild": {
+                "number": 142,
+                "result": "SUCCESS",
+                "building": False,
+            },
+            "lastFailedBuild": None,
+        },
+    )
+    result = _invoke("--no-colour", "--no-update-check", "builds", "deploy")
+    assert result.exit_code == 0
+    assert "#142" in result.stdout
+    assert "Success" in result.stdout
+    # the absent lastFailedBuild renders a dash
+    assert "—" in result.stdout
+    # header is decoration -> stderr
+    assert "build record" in result.stderr
+
+
+def test_builds_json(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "lastBuild": {"number": 9, "result": "FAILURE", "building": False},
+            "lastSuccessfulBuild": None,
+            "lastFailedBuild": {"number": 9, "result": "FAILURE", "building": False},
+        },
+    )
+    result = _invoke("--no-update-check", "--format", "json", "builds", "deploy")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    by_permalink = {r["permalink"]: r for r in data}
+    assert by_permalink["last"]["number"] == 9
+    assert by_permalink["last"]["result"] == "FAILURE"
+    assert by_permalink["successful"]["number"] is None
+
+
+def test_builds_none_shows_empty_state(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {"lastBuild": None, "lastSuccessfulBuild": None, "lastFailedBuild": None},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "builds", "deploy")
+    assert result.exit_code == 0
+    assert "no builds on record" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+# ── params ────────────────────────────────────────────────────────────────────
+
+
+def _job_detail_mock(monkeypatch, job_json):
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "job", lambda self, job: job_json)
+
+
+def test_params_table(monkeypatch):
+    _job_detail_mock(
+        monkeypatch,
+        {
+            "property": [
+                {
+                    "_class": "hudson.model.ParametersDefinitionProperty",
+                    "parameterDefinitions": [
+                        {
+                            "_class": "hudson.model.StringParameterDefinition",
+                            "name": "BRANCH",
+                            "description": "git branch",
+                            "defaultParameterValue": {"value": "main"},
+                        },
+                        {
+                            "_class": "hudson.model.ChoiceParameterDefinition",
+                            "name": "ENV",
+                            "choices": ["dev", "prod"],
+                            "defaultParameterValue": {"value": "dev"},
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    assert result.exit_code == 0
+    assert "BRANCH" in result.stdout
+    assert "string" in result.stdout
+    assert "choice" in result.stdout
+    assert "dev, prod" in result.stdout
+
+
+def test_params_json_types(monkeypatch):
+    _job_detail_mock(
+        monkeypatch,
+        {
+            "property": [
+                {
+                    "_class": "hudson.model.ParametersDefinitionProperty",
+                    "parameterDefinitions": [
+                        {
+                            "_class": "hudson.model.BooleanParameterDefinition",
+                            "name": "DEBUG",
+                            "defaultParameterValue": {"value": False},
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    result = _invoke("--no-update-check", "--format", "json", "params", "deploy")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["name"] == "DEBUG"
+    assert data[0]["type"] == "boolean"
+    assert data[0]["default"] is False
+
+
+def test_params_unparameterised_empty_state(monkeypatch):
+    _job_detail_mock(monkeypatch, {"property": []})
+    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    assert result.exit_code == 0
+    assert "no special instructions" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+# ── rebuild ───────────────────────────────────────────────────────────────────
+
+
+def _rebuild_mocks(monkeypatch, info):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "build_info",
+        lambda self, job, build="lastBuild": info,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "build",
+        lambda self, job, params=None: captured.update(job=job, params=params),
+    )
+    return captured
+
+
+def test_rebuild_carries_previous_params(monkeypatch):
+    info = {
+        "actions": [
+            {
+                "_class": "hudson.model.ParametersAction",
+                "parameters": [
+                    {"name": "BRANCH", "value": "main"},
+                    {"name": "DEBUG", "value": "false"},
+                ],
+            }
+        ]
+    }
+    captured = _rebuild_mocks(monkeypatch, info)
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 0
+    assert captured["params"] == {"BRANCH": "main", "DEBUG": "false"}
+
+
+def test_rebuild_override_wins(monkeypatch):
+    info = {
+        "actions": [
+            {
+                "_class": "hudson.model.ParametersAction",
+                "parameters": [{"name": "BRANCH", "value": "main"}],
+            }
+        ]
+    }
+    captured = _rebuild_mocks(monkeypatch, info)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "rebuild", "deploy", "--param", "BRANCH=dev"
+    )
+    assert result.exit_code == 0
+    assert captured["params"] == {"BRANCH": "dev"}
+
+
+def test_rebuild_no_params_plain(monkeypatch):
+    captured = _rebuild_mocks(monkeypatch, {"actions": []})
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 0
+    assert captured["params"] is None
+
+
+def test_rebuild_missing_build_errors(monkeypatch):
+    _rebuild_mocks(monkeypatch, None)
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 1
+    assert "no build on record" in result.output
+
+
 # ── queue ─────────────────────────────────────────────────────────────────────
 
 

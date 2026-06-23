@@ -107,6 +107,24 @@ class JenkinsClient:
         params = {"depth": depth} if depth else None
         return self._get(path, params=params).get("jobs", [])
 
+    def job(self, job: str) -> dict:
+        """Fetch a job's detail JSON (parameters, builds, properties)."""
+        return self._get(_normalize_jenkins_path(job))
+
+    def build_info(self, job: str, build: int | str = "lastBuild") -> dict | None:
+        """Fetch a build's detail JSON by number or permalink.
+
+        Returns ``None`` when the build or permalink does not exist (404), e.g.
+        a job that has never failed has no ``lastFailedBuild``.
+        """
+        path = f"{_normalize_jenkins_path(job)}/{build}"
+        try:
+            return self._get(path)
+        except JenkinsError as exc:
+            if "Jenkins returned 404" in str(exc):
+                return None
+            raise
+
     def build(self, job: str, params: dict | None = None) -> None:
         job_path = _normalize_jenkins_path(job)
         endpoint = f"{job_path}/buildWithParameters" if params else f"{job_path}/build"

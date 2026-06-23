@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import sys
+import time
 import webbrowser
 from dataclasses import dataclass, field
 
@@ -506,6 +507,78 @@ def _weather_word(score: int | None) -> str | None:
     return None
 
 
+# ── build result / time helpers ──────────────────────────────────────────────
+
+# Jenkins build results (distinct vocabulary from job colours): (colour, emoji).
+_BUILD_RESULT_MAP: dict[str, tuple[str, str]] = {
+    "SUCCESS": ("green", "✅"),
+    "FAILURE": ("red", "❌"),
+    "UNSTABLE": ("yellow", "⚠️"),
+    "ABORTED": ("white", "🚫"),
+    "NOT_BUILT": ("white", "🔘"),
+}
+
+
+def _format_build_result(result: str | None, building: bool, colour: bool) -> str:
+    """Decorated build-result cell (emoji + word) for table output."""
+    if building:
+        text = "▶️ building"
+        return click.style(text, fg="cyan", bold=True) if colour else text
+    if result is None:
+        return "—"
+    fg, emoji = _BUILD_RESULT_MAP.get(result, ("white", "❓"))
+    text = f"{emoji} {result.title()}"
+    return click.style(text, fg=fg, bold=True) if colour else text
+
+
+def _build_result_word(result: str | None, building: bool) -> str:
+    """Semantic build-result string for structured output."""
+    if building:
+        return "BUILDING"
+    return result or ""
+
+
+def _relative_time(ts_ms: int | None) -> str:
+    """Human 'time ago' for an epoch-millis timestamp (e.g. '2h ago')."""
+    if not ts_ms:
+        return "—"
+    delta = int(time.time()) - int(ts_ms) // 1000
+    if delta < 0:
+        delta = 0
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
+
+
+def _format_duration(ms: int | None) -> str:
+    """Human duration for a millisecond span (e.g. '3m12s', '45s')."""
+    if not ms:
+        return "—"
+    seconds = int(ms) // 1000
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, mins = divmod(minutes, 60)
+    return f"{hours}h{mins:02d}m"
+
+
+def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
+    """Parse repeated KEY=VALUE strings into a dict (raises ValueError on a bad one)."""
+    parsed: dict[str, str] = {}
+    for p in raw:
+        if "=" not in p:
+            raise ValueError(p)
+        key, _, value = p.partition("=")
+        parsed[key] = value
+    return parsed
+
+
 def _collect_job_records(
     client: "JenkinsClient",
     job_list: list[dict],
@@ -792,17 +865,15 @@ def build(
 
     JOB is the job name (or folder/job path for nested jobs).
     """
-    param_dict: dict[str, str] = {}
-    for p in params:
-        if "=" not in p:
-            click.echo(
-                click.style(f"I'm afraid '{p}' is not in KEY=VALUE format.", fg="red"),
-                err=True,
-                color=ctx.colour,
-            )
-            sys.exit(1)
-        k, _, v = p.partition("=")
-        param_dict[k] = v
+    try:
+        param_dict = _parse_params(params)
+    except ValueError as exc:
+        click.echo(
+            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
+            err=True,
+            color=ctx.colour,
+        )
+        sys.exit(1)
 
     client = _make_client(ctx, url, user, token)
     try:
@@ -815,6 +886,272 @@ def build(
         click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
         color=ctx.colour,
     )
+
+
+# ── builds ───────────────────────────────────────────────────────────────────
+
+# (permalink, display label) shown by `jeeves builds`.
+_BUILD_PERMALINKS = [
+    ("lastBuild", "last"),
+    ("lastSuccessfulBuild", "successful"),
+    ("lastFailedBuild", "failed"),
+]
+
+
+def _build_record(permalink: str, label: str, info: dict | None) -> dict:
+    """Semantic record for one build permalink (or an empty one when absent)."""
+    if info is None:
+        return {
+            "permalink": label,
+            "number": None,
+            "result": None,
+            "building": False,
+            "timestamp": None,
+            "duration": None,
+            "url": None,
+        }
+    return {
+        "permalink": label,
+        "number": info.get("number"),
+        "result": info.get("result"),
+        "building": bool(info.get("building", False)),
+        "timestamp": info.get("timestamp"),
+        "duration": info.get("duration"),
+        "url": info.get("url"),
+    }
+
+
+def _build_columns(ctx: _Ctx) -> list[Column]:
+    def build_table(r: dict, i: int) -> str:
+        if r["number"] is None:
+            return "—"
+        text = f"#{r['number']}"
+        if r["url"]:
+            text = _hyperlink(text, r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            text = apply_seasonal_colour(text, i, calendar=ctx.seasonal_calendar)
+        return text
+
+    def build_plain(r: dict) -> str:
+        return "" if r["number"] is None else f"#{r['number']}"
+
+    return [
+        Column("permalink", "Permalink"),
+        Column("number", "Build", table=build_table, plain=build_plain),
+        Column(
+            "result",
+            "Result",
+            table=lambda r, _i: _format_build_result(
+                r["result"], r["building"], ctx.colour
+            ),
+            plain=lambda r: _build_result_word(r["result"], r["building"]),
+        ),
+        Column(
+            "timestamp",
+            "When",
+            table=lambda r, _i: _relative_time(r["timestamp"]),
+            plain=lambda r: _relative_time(r["timestamp"]),
+        ),
+        Column(
+            "duration",
+            "Duration",
+            table=lambda r, _i: _format_duration(r["duration"]),
+            plain=lambda r: _format_duration(r["duration"]),
+        ),
+    ]
+
+
+@main.command()
+@click.argument("job")
+@_url_opt
+@_user_opt
+@_token_opt
+@click.option(
+    "--build",
+    "build_id",
+    default=None,
+    metavar="N",
+    help="Show one specific build number instead of the permalink summary.",
+)
+@click.pass_obj
+def builds(
+    ctx: _Ctx,
+    job: str,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+    build_id: str | None,
+) -> None:
+    """Show a job's last, last-successful, and last-failed builds."""
+    client = _make_client(ctx, url, user, token)
+    try:
+        if build_id is not None:
+            targets = [(build_id, f"#{build_id}")]
+        else:
+            targets = _BUILD_PERMALINKS
+        records = [
+            _build_record(permalink, label, client.build_info(job, permalink))
+            for permalink, label in targets
+        ]
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    if all(r["number"] is None for r in records):
+        records = []
+
+    _emit(
+        ctx,
+        records,
+        _build_columns(ctx),
+        header=f"🛠️  The build record for '{job}', sir.",
+        empty=f"'{job}' has no builds on record yet, sir. A clean slate.",
+    )
+
+
+# ── params ───────────────────────────────────────────────────────────────────
+
+
+def _param_records(job_json: dict) -> list[dict]:
+    """Extract parameter definitions from a job's detail JSON."""
+    records = []
+    for prop in job_json.get("property", []):
+        if "ParametersDefinitionProperty" not in prop.get("_class", ""):
+            continue
+        for definition in prop.get("parameterDefinitions", []):
+            cls = definition.get("_class", "").rsplit(".", 1)[-1]
+            ptype = cls.replace("ParameterDefinition", "").lower() or "parameter"
+            default = definition.get("defaultParameterValue") or {}
+            records.append(
+                {
+                    "name": definition.get("name", "?"),
+                    "type": ptype,
+                    "default": default.get("value"),
+                    "choices": definition.get("choices", []) or [],
+                    "description": definition.get("description") or "",
+                }
+            )
+    return records
+
+
+@main.command()
+@click.argument("job")
+@_url_opt
+@_user_opt
+@_token_opt
+@click.pass_obj
+def params(
+    ctx: _Ctx,
+    job: str,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+) -> None:
+    """Show a job's build parameters (name, type, default, choices)."""
+    client = _make_client(ctx, url, user, token)
+    try:
+        job_json = client.job(job)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    records = _param_records(job_json)
+    columns = [
+        Column("name", "Name"),
+        Column("type", "Type"),
+        Column(
+            "default",
+            "Default",
+            plain=lambda r: "" if r["default"] is None else str(r["default"]),
+        ),
+        Column("choices", "Choices", plain=lambda r: ", ".join(map(str, r["choices"]))),
+        Column("description", "Description"),
+    ]
+    _emit(
+        ctx,
+        records,
+        columns,
+        header=f"📝 The instructions for '{job}', sir.",
+        empty=f"'{job}' requires no special instructions, sir. Simply say the word.",
+    )
+
+
+# ── rebuild ──────────────────────────────────────────────────────────────────
+
+
+def _params_from_build(info: dict) -> dict[str, str]:
+    """Extract the parameter values a build was run with."""
+    for action in info.get("actions", []):
+        if "ParametersAction" not in action.get("_class", ""):
+            continue
+        return {
+            p.get("name"): p.get("value")
+            for p in action.get("parameters", [])
+            if p.get("name") is not None
+        }
+    return {}
+
+
+@main.command()
+@click.argument("job")
+@_url_opt
+@_user_opt
+@_token_opt
+@click.option(
+    "--build",
+    "build_id",
+    default="lastBuild",
+    metavar="N",
+    help="Build to copy parameters from (default: lastBuild).",
+)
+@click.option(
+    "--param",
+    "overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Override a parameter for the rebuild. Repeatable.",
+)
+@click.pass_obj
+def rebuild(
+    ctx: _Ctx,
+    job: str,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+    build_id: str,
+    overrides: tuple[str, ...],
+) -> None:
+    """Re-trigger a build with the parameters it last ran with."""
+    try:
+        override_dict = _parse_params(overrides)
+    except ValueError as exc:
+        click.echo(
+            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
+            err=True,
+            color=ctx.colour,
+        )
+        sys.exit(1)
+
+    client = _make_client(ctx, url, user, token)
+    try:
+        info = client.build_info(job, build_id)
+        if info is None:
+            _butler_error(
+                f"There is no build on record to repeat for '{job}', sir.",
+                ctx.colour,
+            )
+            sys.exit(1)
+        merged = {**_params_from_build(info), **override_dict}
+        client.build(job, params=merged or None)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    message = f"🔁 Once more, with feeling — re-running '{job}'."
+    click.echo(click.style(message, fg="green"), color=ctx.colour)
+    if merged:
+        summary = ", ".join(f"{k}={v}" for k, v in merged.items())
+        click.echo(f"   with: {summary}", color=ctx.colour)
 
 
 # ── log ─────────────────────────────────────────────────────────────────────

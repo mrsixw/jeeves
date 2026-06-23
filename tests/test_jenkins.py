@@ -148,6 +148,47 @@ def test_jobs_depth_passes_query_param(client: JenkinsClient) -> None:
     assert result[0]["healthReport"][0]["score"] == 80
 
 
+# ── job / build_info ─────────────────────────────────────────────────────────
+
+
+def test_job_returns_detail(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/api/json", json={"name": "my-pipeline"})
+        data = client.job("my-pipeline")
+    assert data["name"] == "my-pipeline"
+
+
+def test_build_info_returns_data(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/api/json",
+            json={"number": 42, "result": "SUCCESS"},
+        )
+        data = client.build_info("my-pipeline")
+    assert data is not None
+    assert data["number"] == 42
+
+
+def test_build_info_specific_number(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/7/api/json", json={"number": 7})
+        data = client.build_info("my-pipeline", 7)
+    assert data["number"] == 7
+
+
+def test_build_info_404_returns_none(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/lastFailedBuild/api/json", status_code=404)
+        assert client.build_info("my-pipeline", "lastFailedBuild") is None
+
+
+def test_build_info_other_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/lastBuild/api/json", status_code=500)
+        with pytest.raises(JenkinsError, match="500"):
+            client.build_info("my-pipeline")
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 
