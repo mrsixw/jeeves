@@ -182,6 +182,86 @@ def test_jobs_shows_roster(monkeypatch):
     assert "roster" in result.output
 
 
+# ── decoration routing (stdout vs stderr) ─────────────────────────────────────
+
+
+def test_jobs_header_on_stderr_data_on_stdout(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    # decorative butler header goes to stderr only
+    assert "roster" in result.stderr
+    assert "roster" not in result.stdout
+    # data lands on stdout
+    assert "deploy-prod" in result.stdout
+
+
+def test_jobs_empty_state_on_stderr(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "bare" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_queue_header_on_stderr_data_on_stdout(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "queue",
+        lambda self: [{"why": "waiting", "stuck": False, "task": {"name": "deploy"}}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "queue")
+    assert result.exit_code == 0
+    assert "pending requests" in result.stderr
+    assert "pending requests" not in result.stdout
+    assert "deploy" in result.stdout
+
+
+def test_nodes_header_on_stderr_data_on_stdout(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "household staff" in result.stderr
+    assert "household staff" not in result.stdout
+    assert "agent1" in result.stdout
+
+
+def test_status_header_on_stderr_table_on_stdout(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "status",
+        lambda self: {
+            "mode": "NORMAL",
+            "nodeDescription": "master",
+            "numExecutors": 2,
+            "jobs": [],
+        },
+    )
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 0
+    assert "fine form" in result.stderr
+    assert "fine form" not in result.stdout
+    # the data table stays on stdout
+    assert "Mode" in result.stdout
+
+
+def test_greeting_on_stderr(monkeypatch):
+    result = _invoke("--no-colour", "--no-update-check")
+    assert result.exit_code == 0
+    assert "Good morning" in result.stderr
+    assert result.stdout.strip() == ""
+
+
 def test_jobs_shows_status_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
