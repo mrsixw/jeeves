@@ -39,6 +39,50 @@ Config key: `seasonal-calendar = "western"`
 
 Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
 
+## Output formats
+
+### `--format`
+
+Choose how table commands (`jobs`, `nodes`, `queue`) render their results.
+Decorative butler headers always go to stderr, so structured output on stdout
+stays clean and pipe-friendly.
+
+| Format | Description |
+| ------ | ----------- |
+| `table` | Default. Coloured, emoji-rich table with clickable hyperlinks. |
+| `tree` | Hierarchical view (jobs only) — reconstructs the folder/job tree. |
+| `json` | Pretty JSON array of records (stable keys, semantic values). |
+| `ndjson` | One JSON object per line — ideal for streaming and `jq`. |
+| `markdown` | GitHub-flavoured Markdown table for PRs, docs, and Slack. |
+| `csv` / `tsv` | Delimited rows for spreadsheets and `cut`/`awk`. |
+| `template` | Custom one-line-per-row output (see `--template`). |
+
+```bash
+jeeves --format json jobs | jq '.[] | select(.status == "failed")'
+jeeves --format tree jobs --expand
+jeeves --format csv nodes > agents.csv
+jeeves --format markdown jobs >> report.md
+```
+
+Config key: `format = "table"`
+
+Structured formats (`json`, `ndjson`) emit semantic values, never the
+decorative emoji. The JSON keys per command:
+
+- **jobs**: `name`, `type`, `color`, `status`, `health`, `url`
+- **nodes**: `name`, `status`, `executors`, `labels`, `url`
+- **queue**: `name`, `reason`, `stuck`, `url`
+
+### `--template`
+
+Row template used with `--format template`. Fields are the JSON keys above,
+referenced in `{braces}`.
+
+```bash
+jeeves --format template --template "{name}: {status} ({health})" jobs
+jeeves --format template --template "{name} -> {url}" nodes
+```
+
 ## Config options
 
 ### `--config PATH`
