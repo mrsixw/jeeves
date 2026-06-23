@@ -275,7 +275,7 @@ def main(
             greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
         elif not no_colour:
             greeting = active_theme.apply(greeting, role="primary")
-        click.echo(greeting, color=colour)
+        click.echo(greeting, err=True, color=colour)
         return
 
     # ── Update check (runs after the subcommand via close callback) ────────
@@ -315,6 +315,7 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
 
     click.echo(
         click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
+        err=True,
         color=ctx.colour,
     )
     mode_str = (
@@ -579,12 +580,14 @@ def jobs(
     if not job_list:
         click.echo(
             "The staff roster appears entirely bare. "
-            "Jenkins would seem to have no positions filled at present."
+            "Jenkins would seem to have no positions filled at present.",
+            err=True,
         )
         return
 
     click.echo(
         click.style("📋 Allow me to present the staff roster.", fg="cyan"),
+        err=True,
         color=ctx.colour,
     )
     rows = _collect_job_rows(
@@ -729,11 +732,14 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     if not items:
         click.echo(
             "The queue stands quite empty. "
-            "Jenkins is evidently at leisure — a rare and precious state of affairs."
+            "Jenkins is evidently at leisure — a rare and precious state of affairs.",
+            err=True,
         )
         return
 
-    click.echo(click.style("⏳ The pending requests.", fg="cyan"), color=ctx.colour)
+    click.echo(
+        click.style("⏳ The pending requests.", fg="cyan"), err=True, color=ctx.colour
+    )
     rows = []
     for idx, item in enumerate(items):
         task_name = item.get("task", {}).get("name", "?")
@@ -829,11 +835,14 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     if not node_list:
         click.echo(
             "The household staff appears to have entirely absented themselves. "
-            "One trusts they haven't all handed in their notice."
+            "One trusts they haven't all handed in their notice.",
+            err=True,
         )
         return
 
-    click.echo(click.style("🏠 The household staff.", fg="cyan"), color=ctx.colour)
+    click.echo(
+        click.style("🏠 The household staff.", fg="cyan"), err=True, color=ctx.colour
+    )
     rows = []
     for idx, n in enumerate(node_list):
         display_name = n.get("displayName", "?")
