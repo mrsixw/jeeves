@@ -8,6 +8,29 @@ class JenkinsError(Exception):
     """Raised when a Jenkins API call fails."""
 
 
+class JenkinsLoginRequired(JenkinsError):
+    """Raised when Jenkins redirects API calls to an interactive browser login.
+
+    Typical of SSO or reverse-proxy-backed deployments that bounce
+    unauthenticated API requests to ``securityRealm/commenceLogin`` until a
+    browser login session exists. The message embeds the base URL so the CLI
+    can offer to open it.
+    """
+
+
+# Marker present in the redirect chain when Jenkins wants a browser login.
+_LOGIN_REDIRECT_MARKER = "securityRealm/commenceLogin"
+
+
+def _is_login_redirect(resp: requests.Response) -> bool:
+    """True if the response (or its redirect chain) points at the login page."""
+    candidates = [resp.url]
+    for hop in resp.history:
+        candidates.append(hop.url)
+        candidates.append(hop.headers.get("Location", ""))
+    return any(_LOGIN_REDIRECT_MARKER in (c or "") for c in candidates)
+
+
 def _normalize_jenkins_path(path: str) -> str:
     """Normalize a slash-separated job/folder path to Jenkins URL format.
 
@@ -29,8 +52,16 @@ class JenkinsClient:
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         try:
             resp = self._session.request(method, url, **kwargs)
+            if _is_login_redirect(resp):
+                raise JenkinsLoginRequired(
+                    f"Jenkins requires browser login at {self._base}"
+                )
             resp.raise_for_status()
             return resp
+        except requests.exceptions.TooManyRedirects as exc:
+            raise JenkinsLoginRequired(
+                f"Jenkins requires browser login at {self._base}"
+            ) from exc
         except requests.exceptions.ConnectionError as exc:
             raise JenkinsError(f"Cannot reach Jenkins at {self._base}") from exc
         except requests.exceptions.HTTPError as exc:

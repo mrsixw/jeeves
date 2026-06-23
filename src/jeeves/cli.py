@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import sys
+import webbrowser
 from dataclasses import dataclass, field
 
 import click
@@ -37,8 +38,29 @@ class _Ctx:
     template: str | None = None
 
 
+def _isatty() -> bool:
+    """Whether stdout is an interactive terminal (seam for testing)."""
+    return sys.stdout.isatty()
+
+
 def _butler_error(msg: str, colour: bool) -> None:
-    if "Cannot reach Jenkins at" in msg:
+    if "requires browser login at" in msg:
+        url = msg.split("requires browser login at ", 1)[-1].strip()
+        text = (
+            "It appears the Jenkins estate requires you to sign in through your "
+            "browser first, sir — your API token alone will not open the door. "
+        )
+        opened = False
+        if _isatty():
+            try:
+                opened = webbrowser.open(url)
+            except webbrowser.Error:
+                opened = False
+        if opened:
+            text += f"I've opened {url} for you; do log in and try again."
+        else:
+            text += f"Kindly visit {url}, log in, and try again."
+    elif "Cannot reach Jenkins at" in msg:
         url = msg.split("Cannot reach Jenkins at ", 1)[-1].strip()
         text = (
             f"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, "

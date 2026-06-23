@@ -176,6 +176,52 @@ def test_error_generic_shows_bother_message(monkeypatch):
     assert "bother" in result.output
 
 
+# ── browser-login redirect handling ──────────────────────────────────────────
+
+
+def test_login_required_non_interactive_prints_url(monkeypatch):
+    def _raise(self):
+        raise jenkins_mod.JenkinsLoginRequired(
+            "Jenkins requires browser login at http://jenkins.example.com"
+        )
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
+    monkeypatch.setattr(cli_mod, "_isatty", lambda: False)
+    opened = {"n": 0}
+    monkeypatch.setattr(
+        cli_mod.webbrowser, "open", lambda *a, **k: opened.__setitem__("n", 1)
+    )
+
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert "browser" in result.output
+    assert "http://jenkins.example.com" in result.output
+    # non-interactive: must NOT open a browser
+    assert opened["n"] == 0
+
+
+def test_login_required_interactive_opens_browser(monkeypatch):
+    def _raise(self):
+        raise jenkins_mod.JenkinsLoginRequired(
+            "Jenkins requires browser login at http://jenkins.example.com"
+        )
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "status", _raise)
+    monkeypatch.setattr(cli_mod, "_isatty", lambda: True)
+    opened = {"url": None}
+
+    def _fake_open(url, *a, **k):
+        opened["url"] = url
+        return True
+
+    monkeypatch.setattr(cli_mod.webbrowser, "open", _fake_open)
+
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert opened["url"] == "http://jenkins.example.com"
+    assert "opened" in result.output
+
+
 # ── jobs ─────────────────────────────────────────────────────────────────────
 
 
