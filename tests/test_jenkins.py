@@ -4,7 +4,12 @@ import pytest
 import requests
 import requests_mock as req_mock
 
-from jeeves.jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
+from jeeves.jenkins import (
+    JenkinsClient,
+    JenkinsError,
+    JenkinsLoginRequired,
+    _normalize_jenkins_path,
+)
 
 BASE = "http://jenkins.example.com"
 
@@ -66,6 +71,36 @@ def test_status_http_error_raises(client: JenkinsClient) -> None:
         m.get(f"{BASE}/api/json", status_code=403)
         with pytest.raises(JenkinsError, match="403"):
             client.status()
+
+
+# ── browser-login redirect detection ────────────────────────────────────────
+
+
+def test_too_many_redirects_raises_login_required(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/api/json", exc=requests.exceptions.TooManyRedirects())
+        with pytest.raises(JenkinsLoginRequired, match="requires browser login"):
+            client.status()
+
+
+def test_commence_login_redirect_raises_login_required(
+    client: JenkinsClient,
+) -> None:
+    login_url = f"{BASE}/securityRealm/commenceLogin?from=%2Fapi%2Fjson"
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/api/json",
+            status_code=302,
+            headers={"Location": login_url},
+        )
+        m.get(login_url, text="<html>please log in</html>")
+        with pytest.raises(JenkinsLoginRequired, match="requires browser login"):
+            client.status()
+
+
+def test_login_required_is_jenkins_error(client: JenkinsClient) -> None:
+    # callers that catch JenkinsError still handle the login case
+    assert issubclass(JenkinsLoginRequired, JenkinsError)
 
 
 # ── jobs ────────────────────────────────────────────────────────────────────
