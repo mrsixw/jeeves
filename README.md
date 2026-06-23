@@ -28,25 +28,12 @@ curl -sSL https://raw.githubusercontent.com/mrsixw/jeeves/main/install.sh | bash
 ## Quick start
 
 ```bash
-jeeves --help
-jeeves --theme rainbow
-jeeves --name Alice
-jeeves --init-config
-jeeves --show-config
-eval "$(jeeves --completion bash)"
+jeeves --init-config                       # write a starter config
+jeeves status                              # check the Jenkins server
+jeeves jobs                                # list jobs and their status
+jeeves --format json jobs | jq            # structured output for scripting
+eval "$(jeeves --completion bash)"         # shell completions
 ```
-
-## Using this template
-
-See the **[Getting Started guide](docs/manual/getting-started.md)** for the full
-walkthrough. In brief:
-
-1. Click **Use this template** on GitHub
-2. Clone your new repo and run `uv sync --extra dev`
-3. Run `uv run python utils/rename.py` to rename the package in one pass
-4. Replace the `greet` business logic in `src/<pkg>/cli.py` with your own
-5. Add a `GH_TOKEN` secret to your repo (required for the release CI job)
-6. Run `make format && make lint && make test` to verify everything works
 
 ## Development
 
@@ -57,8 +44,11 @@ make format && make lint && make test
 
 ## Documentation
 
-- [Getting started](docs/manual/getting-started.md)
 - [Options reference](docs/manual/options.md)
 - [Usage guide](docs/manual/usage.md)
 - [Troubleshooting](docs/manual/troubleshooting.md)
 - [Contributing](CONTRIBUTING.md)
+
+---
+
+Made with ❤️ in the UK using the [five-clis](https://github.com/mrsixw/five-clis) framework.

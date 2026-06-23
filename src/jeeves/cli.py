@@ -104,6 +104,10 @@ _token_opt = click.option(
 
 
 @click.group(
+    epilog=(
+        "Made with ❤️  in the UK using the five-clis framework "
+        "— https://github.com/mrsixw/five-clis"
+    ),
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )

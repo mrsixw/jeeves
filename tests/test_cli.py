@@ -31,6 +31,13 @@ def test_help():
     assert "jobs" in result.output
 
 
+def test_help_shows_five_clis_credit():
+    result = _invoke("--help")
+    assert result.exit_code == 0
+    assert "five-clis" in result.output
+    assert "github.com/mrsixw/five-clis" in result.output
+
+
 def test_bare_invocation_shows_greeting():
     result = _invoke("--no-colour")
     assert result.exit_code == 0
