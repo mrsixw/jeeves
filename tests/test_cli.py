@@ -1,3 +1,5 @@
+import json as _json
+
 from click.testing import CliRunner
 
 from jeeves import cli as cli_mod
@@ -180,6 +182,160 @@ def test_jobs_shows_roster(monkeypatch):
     assert result.exit_code == 0
     assert "deploy-prod" in result.output
     assert "roster" in result.output
+
+
+# ── output formats (--format) ─────────────────────────────────────────────────
+
+
+def _jobs_mock(monkeypatch, jobs):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: jobs
+    )
+
+
+def test_jobs_format_json(monkeypatch):
+    _jobs_mock(
+        monkeypatch,
+        [
+            {
+                "name": "deploy",
+                "color": "blue",
+                "_class": "org.jenkinsci.plugins.workflow.job.WorkflowJob",
+                "healthReport": [{"score": 90}],
+            }
+        ],
+    )
+    result = _invoke("--no-update-check", "--format", "json", "jobs")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["name"] == "deploy"
+    assert data[0]["type"] == "pipeline"
+    assert data[0]["status"] == "passed"
+    assert data[0]["health"] == 90
+    # no decorative header on stdout in json mode
+    assert "roster" not in result.stdout
+
+
+def test_jobs_format_ndjson_one_per_line(monkeypatch):
+    _jobs_mock(
+        monkeypatch,
+        [{"name": "a", "color": "blue"}, {"name": "b", "color": "red"}],
+    )
+    result = _invoke("--no-update-check", "--format", "ndjson", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 2
+    assert _json.loads(lines[0])["name"] == "a"
+
+
+def test_jobs_format_csv(monkeypatch):
+    _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
+    result = _invoke("--no-update-check", "--format", "csv", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == "Job,Type,Status"
+    assert lines[1].startswith("deploy,job,passed")
+
+
+def test_jobs_format_markdown(monkeypatch):
+    _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
+    result = _invoke(
+        "--no-update-check", "--format", "markdown", "jobs", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "|" in result.stdout
+    assert "passed" in result.stdout
+
+
+def test_jobs_format_template(monkeypatch):
+    _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
+    result = _invoke(
+        "--no-update-check",
+        "--format",
+        "template",
+        "--template",
+        "{name}={status}",
+        "jobs",
+        "--no-weather",
+    )
+    assert result.exit_code == 0
+    assert "deploy=passed" in result.stdout
+
+
+def test_jobs_format_template_requires_template(monkeypatch):
+    _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
+    result = _invoke("--no-update-check", "--format", "template", "jobs")
+    assert result.exit_code == 1
+    assert "template" in result.output
+
+
+def test_jobs_format_tree_expand(monkeypatch):
+    def _mock(self, folder=None, depth=0):
+        if folder is None:
+            return [
+                {
+                    "name": "platform",
+                    "_class": "com.cloudbees.hudson.plugins.folder.Folder",
+                }
+            ]
+        if folder == "platform":
+            return [{"name": "api", "color": "blue"}]
+        return []
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _mock)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--format", "tree", "jobs", "--expand"
+    )
+    assert result.exit_code == 0
+    assert "jenkins" in result.stdout
+    assert "platform" in result.stdout
+    assert "api" in result.stdout
+    # tree branch glyphs present
+    assert "└──" in result.stdout or "├──" in result.stdout
+
+
+def test_jobs_format_json_empty_is_array(monkeypatch):
+    _jobs_mock(monkeypatch, [])
+    result = _invoke("--no-update-check", "--format", "json", "jobs")
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "[]"
+
+
+def test_nodes_format_json_labels_as_list(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self: [
+            {
+                "displayName": "agent1",
+                "offline": False,
+                "numExecutors": 4,
+                "assignedLabels": [
+                    {"name": "agent1"},
+                    {"name": "linux"},
+                    {"name": "docker"},
+                ],
+            }
+        ],
+    )
+    result = _invoke("--no-update-check", "--format", "json", "nodes")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["labels"] == ["linux", "docker"]
+    assert data[0]["status"] == "online"
+
+
+def test_queue_format_json_stuck_bool(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "queue",
+        lambda self: [{"why": "blocked", "stuck": True, "task": {"name": "deploy"}}],
+    )
+    result = _invoke("--no-update-check", "--format", "json", "queue")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["name"] == "deploy"
+    assert data[0]["stuck"] is True
 
 
 # ── decoration routing (stdout vs stderr) ─────────────────────────────────────

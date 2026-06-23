@@ -7,17 +7,17 @@ utmost discretion and efficiency.
 from __future__ import annotations
 
 import random
-import re
-import shutil
 import sys
 from dataclasses import dataclass, field
 
 import click
 from tabulate import tabulate
 
+from . import render as _render
 from .config import get_jenkins_config, load_config, show_config, write_default_config
 from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
+from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import check_for_update
 
@@ -33,6 +33,8 @@ class _Ctx:
     no_update_check: bool = False
     seasonal_colours: bool = True
     seasonal_calendar: str = "western"
+    fmt: str = "table"
+    template: str | None = None
 
 
 def _butler_error(msg: str, colour: bool) -> None:
@@ -167,6 +169,20 @@ _token_opt = click.option(
     envvar=f"{_ENVVAR_PREFIX}_NO_COLOUR",
     help="Disable all ANSI colour output.",
 )
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(_render.FORMATS, case_sensitive=False),
+    default=None,
+    help="Output format for table commands (default: table).",
+)
+@click.option(
+    "--template",
+    "output_template",
+    default=None,
+    metavar="STR",
+    help='Row template for --format template, e.g. "{name}: {status}".',
+)
 # ── Caching ─────────────────────────────────────────────────────────────────
 @click.option(
     "--cache/--no-cache",
@@ -198,6 +214,8 @@ def main(
     seasonal_colours,
     seasonal_calendar,
     no_colour,
+    output_format,
+    output_template,
     cache,
     cache_ttl,
     no_update_check,
@@ -252,6 +270,9 @@ def main(
         else cfg.get("seasonal-calendar", "western")
     )
     no_update_check = no_update_check or cfg.get("no-update-check", False)
+    output_format = (
+        output_format if output_format is not None else cfg.get("format", "table")
+    ).lower()
 
     active_theme = get_theme(theme_name)
 
@@ -262,6 +283,8 @@ def main(
         no_update_check=no_update_check,
         seasonal_colours=seasonal_colours if seasonal_colours is not None else True,
         seasonal_calendar=seasonal_calendar or "western",
+        fmt=output_format,
+        template=output_template,
     )
     ctx.ensure_object(_Ctx)
 
@@ -362,8 +385,6 @@ _JOB_TYPE_MAP: list[tuple[str, str, str]] = [
 ]
 _JOB_TYPE_FALLBACK = ("🔨", "job")
 
-_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[a-zA-Z]|\]8;;.*?\x1b\\|\]8;;.*?\x07)")
-
 _OSC8_OPEN = "\x1b]8;;{url}\x1b\\"
 _OSC8_CLOSE = "\x1b]8;;\x1b\\"
 
@@ -389,30 +410,25 @@ def _is_folder(job: dict) -> bool:
     return any(f in cls for f in _FOLDER_CLASS_FRAGMENTS)
 
 
-def _job_type_cell(job: dict) -> str:
+_ICON_BY_LABEL = {label: icon for _, icon, label in _JOB_TYPE_MAP}
+_ICON_BY_LABEL[_JOB_TYPE_FALLBACK[1]] = _JOB_TYPE_FALLBACK[0]
+
+
+def _job_type_label(job: dict) -> str:
+    """Semantic job-type label (e.g. 'pipeline') derived from the `_class`."""
     cls = job.get("_class", "")
-    for fragment, icon, label in _JOB_TYPE_MAP:
+    for fragment, _icon, label in _JOB_TYPE_MAP:
         if fragment in cls:
-            return f"{icon} {label}"
-    icon, label = _JOB_TYPE_FALLBACK
+            return label
+    return _JOB_TYPE_FALLBACK[1]
+
+
+def _type_table_cell(label: str, colour: bool) -> str:
+    """Decorated Type cell (icon + label) for table output."""
+    if label == "folder":
+        return click.style("📁 folder", fg="cyan") if colour else "📁 folder"
+    icon = _ICON_BY_LABEL.get(label, _JOB_TYPE_FALLBACK[0])
     return f"{icon} {label}"
-
-
-def _strip_ansi(s: str) -> str:
-    return _ANSI_RE.sub("", s)
-
-
-def _compress_type_cells(rows: list[list], col: int) -> list[list]:
-    """Strip label text from Type cells, leaving only the emoji icon."""
-    result = []
-    for row in rows:
-        new_row = list(row)
-        plain = _strip_ansi(new_row[col])
-        first_word = plain.split()[0] if plain.split() else plain
-        if first_word != plain:
-            new_row[col] = new_row[col].replace(plain, first_word, 1)
-        result.append(new_row)
-    return result
 
 
 def _render_type_key() -> str:
@@ -454,51 +470,61 @@ def _format_weather(score: int | None, colour: bool) -> str:
     return "—"
 
 
-def _collect_job_rows(
+def _weather_word(score: int | None) -> str | None:
+    """Semantic weather label (e.g. 'sunny') for a health score, or None."""
+    if score is None:
+        return None
+    for threshold, _fg, _emoji, label in _WEATHER_MAP:
+        if score >= threshold:
+            return label
+    return None
+
+
+def _collect_job_records(
     client: "JenkinsClient",
     job_list: list[dict],
-    colour: bool,
-    seasonal_colours: bool,
-    seasonal_calendar: str,
     no_weather: bool,
     expand: bool,
     path_prefix: str,
-    colour_index: list[int],
-    base_url: str = "",
-) -> list[list]:
-    """Recursively build table rows, expanding folders when expand=True."""
-    rows = []
+    base_url: str,
+) -> list[dict]:
+    """Recursively build semantic job records, expanding folders when asked.
+
+    Each record is the JSON contract for a job:
+    ``{name, type, color, status, health, url}``.
+    """
+    records: list[dict] = []
     for j in job_list:
         name = j.get("name", "?")
         full_path = f"{path_prefix}/{name}" if path_prefix else name
+        url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
 
         if _is_folder(j):
-            type_cell = click.style("📁 folder", fg="cyan") if colour else "📁 folder"
-            status_cell = "N/A"
-            weather_cell = "N/A"
-        else:
-            type_cell = _job_type_cell(j)
-            raw = j.get("color", "grey")
-            status_cell = _format_job_status(raw, colour)
-            reports = j.get("healthReport") or []
-            score = reports[0].get("score") if reports else None
-            weather_cell = _format_weather(score, colour)
-
-        display_name = full_path
-        idx = colour_index[0]
-        colour_index[0] += 1
-        if base_url:
-            job_url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
-            display_name = _hyperlink(display_name, job_url, colour)
-        if colour and seasonal_colours:
-            display_name = apply_seasonal_colour(
-                display_name, idx, calendar=seasonal_calendar
+            records.append(
+                {
+                    "name": full_path,
+                    "type": "folder",
+                    "color": None,
+                    "status": None,
+                    "health": None,
+                    "url": url,
+                }
             )
-
-        row = [display_name, type_cell, status_cell]
-        if not no_weather:
-            row.append(weather_cell)
-        rows.append(row)
+        else:
+            color = j.get("color", "grey")
+            status = _JOB_COLOUR_MAP.get(color, ("white", color, "❓"))[1]
+            reports = j.get("healthReport") or []
+            health = reports[0].get("score") if reports else None
+            records.append(
+                {
+                    "name": full_path,
+                    "type": _job_type_label(j),
+                    "color": color,
+                    "status": status,
+                    "health": health,
+                    "url": url,
+                }
+            )
 
         if expand and _is_folder(j):
             try:
@@ -506,22 +532,138 @@ def _collect_job_rows(
                 child_jobs = client.jobs(folder=full_path, depth=depth)
             except JenkinsError:
                 child_jobs = []
-            rows.extend(
-                _collect_job_rows(
-                    client,
-                    child_jobs,
-                    colour,
-                    seasonal_colours,
-                    seasonal_calendar,
-                    no_weather,
-                    expand,
-                    full_path,
-                    colour_index,
-                    base_url,
+            records.extend(
+                _collect_job_records(
+                    client, child_jobs, no_weather, expand, full_path, base_url
                 )
             )
 
-    return rows
+    return records
+
+
+def _job_columns(ctx: _Ctx, no_weather: bool) -> list[Column]:
+    """Column specs for the jobs roster (table cells + plain projections)."""
+
+    def name_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["name"], r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    def status_table(r: dict, _i: int) -> str:
+        if r["type"] == "folder":
+            return "N/A"
+        return _format_job_status(r["color"], ctx.colour)
+
+    def status_plain(r: dict) -> str:
+        return "n/a" if r["type"] == "folder" else (r["status"] or "")
+
+    def weather_table(r: dict, _i: int) -> str:
+        if r["type"] == "folder":
+            return "N/A"
+        return _format_weather(r["health"], ctx.colour)
+
+    def weather_plain(r: dict) -> str:
+        if r["type"] == "folder":
+            return "n/a"
+        return _weather_word(r["health"]) or ""
+
+    def type_table(r: dict, _i: int) -> str:
+        return _type_table_cell(r["type"], ctx.colour)
+
+    cols = [
+        Column("name", "Job", table=name_table, plain=lambda r: r["name"]),
+        Column("type", "Type", table=type_table),
+        Column("status", "Status", table=status_table, plain=status_plain),
+    ]
+    if not no_weather:
+        cols.append(
+            Column("health", "Weather", table=weather_table, plain=weather_plain)
+        )
+    return cols
+
+
+def _job_tree(ctx: _Ctx, records: list[dict], root_label: str) -> str:
+    """Render the job roster as a hierarchy reconstructed from name paths."""
+    by_path = {r["name"]: r for r in records}
+    tree: dict = {}
+    for r in records:
+        node = tree
+        for part in r["name"].split("/"):
+            node = node.setdefault(part, {})
+
+    def leaf_label(rec: dict) -> str:
+        leaf = rec["name"].split("/")[-1]
+        if ctx.colour and ctx.seasonal_colours:
+            leaf = apply_seasonal_colour(leaf, 0, calendar=ctx.seasonal_calendar)
+        if rec["type"] == "folder":
+            deco = "📁 folder"
+        else:
+            emoji = _JOB_COLOUR_MAP.get(rec["color"], ("white", "?", "❓"))[2]
+            deco = f"{emoji} {rec['status']}"
+        return f"{leaf}  {deco}"
+
+    lines = [click.style(root_label, bold=True) if ctx.colour else root_label]
+
+    def walk(node: dict, prefix: str, path_prefix: str) -> None:
+        items = list(node.items())
+        for idx, (part, children) in enumerate(items):
+            last = idx == len(items) - 1
+            branch = "└── " if last else "├── "
+            full = f"{path_prefix}/{part}" if path_prefix else part
+            rec = by_path.get(full)
+            label = leaf_label(rec) if rec else f"{part}"
+            lines.append(f"{prefix}{branch}{label}")
+            walk(children, prefix + ("    " if last else "│   "), full)
+
+    walk(tree, "", "")
+    return "\n".join(lines)
+
+
+def _emit(
+    ctx: _Ctx,
+    records: list[dict],
+    columns: list[Column],
+    *,
+    header: str,
+    empty: str,
+    tree_fn=None,
+    compress_col: int | None = None,
+) -> None:
+    """Render records in the active format; route decoration to stderr."""
+    decorative = ctx.fmt in ("table", "tree")
+
+    if not records:
+        if decorative:
+            click.echo(empty, err=True)
+        else:
+            click.echo(
+                _render.render(ctx.fmt, [], columns, template=ctx.template),
+                color=ctx.colour,
+            )
+        return
+
+    if decorative:
+        click.echo(click.style(header, fg="cyan"), err=True, color=ctx.colour)
+
+    cc = (
+        compress_col
+        if (ctx.fmt == "table" and ctx.colour and sys.stdout.isatty())
+        else None
+    )
+    try:
+        out = _render.render(
+            ctx.fmt,
+            records,
+            columns,
+            template=ctx.template,
+            tree_fn=tree_fn,
+            compress_col=cc,
+        )
+    except ValueError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+    click.echo(out, color=ctx.colour)
 
 
 @main.command()
@@ -577,47 +719,22 @@ def jobs(
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
-    if not job_list:
-        click.echo(
+    records = _collect_job_records(
+        client, job_list, no_weather, expand, folder or "", client._base
+    )
+    columns = _job_columns(ctx, no_weather)
+    root_label = f"jenkins/{folder}" if folder else "jenkins"
+    _emit(
+        ctx,
+        records,
+        columns,
+        header="📋 Allow me to present the staff roster.",
+        empty=(
             "The staff roster appears entirely bare. "
-            "Jenkins would seem to have no positions filled at present.",
-            err=True,
-        )
-        return
-
-    click.echo(
-        click.style("📋 Allow me to present the staff roster.", fg="cyan"),
-        err=True,
-        color=ctx.colour,
-    )
-    rows = _collect_job_rows(
-        client,
-        job_list,
-        ctx.colour,
-        ctx.seasonal_colours,
-        ctx.seasonal_calendar,
-        no_weather,
-        expand,
-        path_prefix=folder or "",
-        colour_index=[0],
-        base_url=client._base,
-    )
-    headers = ["Job", "Type", "Status"] + ([] if no_weather else ["Weather"])
-
-    if ctx.colour and sys.stdout.isatty():
-        term_width = shutil.get_terminal_size().columns
-        rendered = tabulate(
-            rows, headers=headers, tablefmt="simple", disable_numparse=True
-        )
-        max_width = max(
-            (len(_strip_ansi(line)) for line in rendered.splitlines()), default=0
-        )
-        if max_width > term_width:
-            rows = _compress_type_cells(rows, col=1)
-
-    click.echo(
-        tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True),
-        color=ctx.colour,
+            "Jenkins would seem to have no positions filled at present."
+        ),
+        tree_fn=lambda recs: _job_tree(ctx, recs, root_label),
+        compress_col=1,
     )
 
 
@@ -729,45 +846,55 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
-    if not items:
-        click.echo(
-            "The queue stands quite empty. "
-            "Jenkins is evidently at leisure — a rare and precious state of affairs.",
-            err=True,
-        )
-        return
-
-    click.echo(
-        click.style("⏳ The pending requests.", fg="cyan"), err=True, color=ctx.colour
-    )
-    rows = []
-    for idx, item in enumerate(items):
+    records = []
+    for item in items:
         task_name = item.get("task", {}).get("name", "?")
         task_url = item.get("task", {}).get("url") or (
             f"{client._base}/{_normalize_jenkins_path(task_name)}"
         )
-        task = _hyperlink(task_name, task_url, ctx.colour)
+        records.append(
+            {
+                "name": task_name,
+                "reason": item.get("why", ""),
+                "stuck": bool(item.get("stuck", False)),
+                "url": task_url,
+            }
+        )
+
+    def name_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["name"], r["url"], ctx.colour)
         if ctx.colour and ctx.seasonal_colours:
-            task = apply_seasonal_colour(task, idx, calendar=ctx.seasonal_calendar)
-        why = item.get("why", "")
-        is_stuck = item.get("stuck", False)
-        if ctx.colour:
-            stuck = (
-                click.style("⚠️ yes", fg="red", bold=True)
-                if is_stuck
-                else click.style("no", fg="green")
-            )
-        else:
-            stuck = "yes" if is_stuck else "no"
-        rows.append([task, why, stuck])
-    click.echo(
-        tabulate(
-            rows,
-            headers=["Job", "Reason", "Stuck"],
-            tablefmt="simple",
-            disable_numparse=True,
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    def stuck_table(r: dict, _i: int) -> str:
+        if not ctx.colour:
+            return "yes" if r["stuck"] else "no"
+        return (
+            click.style("⚠️ yes", fg="red", bold=True)
+            if r["stuck"]
+            else click.style("no", fg="green")
+        )
+
+    columns = [
+        Column("name", "Job", table=name_table, plain=lambda r: r["name"]),
+        Column("reason", "Reason"),
+        Column(
+            "stuck",
+            "Stuck",
+            table=stuck_table,
+            plain=lambda r: "yes" if r["stuck"] else "no",
         ),
-        color=ctx.colour,
+    ]
+    _emit(
+        ctx,
+        records,
+        columns,
+        header="⏳ The pending requests.",
+        empty=(
+            "The queue stands quite empty. Jenkins is evidently at leisure "
+            "— a rare and precious state of affairs."
+        ),
     )
 
 
@@ -832,64 +959,74 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
-    if not node_list:
-        click.echo(
-            "The household staff appears to have entirely absented themselves. "
-            "One trusts they haven't all handed in their notice.",
-            err=True,
-        )
-        return
-
-    click.echo(
-        click.style("🏠 The household staff.", fg="cyan"), err=True, color=ctx.colour
-    )
-    rows = []
-    for idx, n in enumerate(node_list):
+    built_in = {"master", "Built-In Node"}
+    records = []
+    for n in node_list:
         display_name = n.get("displayName", "?")
-        _built_in = {"master", "Built-In Node"}
-        url_name = "(built-in)" if display_name in _built_in else display_name
-        node_url = f"{client._base}/computer/{url_name}/"
-        name = _hyperlink(display_name, node_url, ctx.colour)
-        if ctx.colour and ctx.seasonal_colours:
-            name = apply_seasonal_colour(name, idx, calendar=ctx.seasonal_calendar)
-        is_offline = n.get("offline", False)
-        if ctx.colour:
-            status = (
-                click.style("🔴 offline", fg="red", bold=True)
-                if is_offline
-                else click.style("✅ online", fg="green", bold=True)
-            )
-        else:
-            status = "offline" if is_offline else "online"
-        executors = n.get("numExecutors", "?")
-        exec_cell = (
-            colour_grade_number(executors)
-            if ctx.colour and isinstance(executors, int)
-            else executors
-        )
+        url_name = "(built-in)" if display_name in built_in else display_name
         raw_labels = [
             lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
         ]
-        label_parts = []
-        for lbl in raw_labels:
-            if lbl == display_name:
-                continue
+        records.append(
+            {
+                "name": display_name,
+                "status": "offline" if n.get("offline", False) else "online",
+                "executors": n.get("numExecutors", "?"),
+                "labels": [lbl for lbl in raw_labels if lbl != display_name],
+                "url": f"{client._base}/computer/{url_name}/",
+            }
+        )
+
+    def name_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["name"], r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    def status_table(r: dict, _i: int) -> str:
+        if not ctx.colour:
+            return r["status"]
+        if r["status"] == "offline":
+            return click.style("🔴 offline", fg="red", bold=True)
+        return click.style("✅ online", fg="green", bold=True)
+
+    def executors_table(r: dict, _i: int) -> str:
+        ex = r["executors"]
+        if ctx.colour and isinstance(ex, int):
+            return colour_grade_number(ex)
+        return str(ex)
+
+    def labels_table(r: dict, i: int) -> str:
+        parts = []
+        for lbl in r["labels"]:
             linked = _hyperlink(lbl, f"{client._base}/label/{lbl}/", ctx.colour)
             if ctx.colour and ctx.seasonal_colours:
                 linked = apply_seasonal_colour(
-                    linked, idx, calendar=ctx.seasonal_calendar
+                    linked, i, calendar=ctx.seasonal_calendar
                 )
-            label_parts.append(linked)
-        labels = ", ".join(label_parts)
-        rows.append([name, status, exec_cell, labels])
-    click.echo(
-        tabulate(
-            rows,
-            headers=["Node", "Status", "Executors", "Labels"],
-            tablefmt="simple",
-            disable_numparse=True,
+            parts.append(linked)
+        return ", ".join(parts)
+
+    columns = [
+        Column("name", "Node", table=name_table, plain=lambda r: r["name"]),
+        Column("status", "Status", table=status_table),
+        Column("executors", "Executors", table=executors_table),
+        Column(
+            "labels",
+            "Labels",
+            table=labels_table,
+            plain=lambda r: ", ".join(r["labels"]),
         ),
-        color=ctx.colour,
+    ]
+    _emit(
+        ctx,
+        records,
+        columns,
+        header="🏠 The household staff.",
+        empty=(
+            "The household staff appears to have entirely absented themselves. "
+            "One trusts they haven't all handed in their notice."
+        ),
     )
 
 
