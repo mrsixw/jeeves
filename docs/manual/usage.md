@@ -4,7 +4,7 @@
 
 ```bash
 jeeves
-jeeves --name Alice
+jeeves status
 jeeves --theme rainbow
 jeeves --no-colour
 ```
