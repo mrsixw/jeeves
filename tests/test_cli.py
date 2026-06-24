@@ -726,6 +726,8 @@ def test_jobs_empty_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "jobs")
     assert result.exit_code == 0
     assert "bare" in result.output or "positions" in result.output
+    # every Jeeves-voiced message leads with an emoji (no double space after it)
+    assert "🗒️ The staff roster" in result.output
 
 
 # ── hyperlinks ────────────────────────────────────────────────────────────────
@@ -1160,6 +1162,7 @@ def test_queue_empty_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "queue")
     assert result.exit_code == 0
     assert "empty" in result.output or "leisure" in result.output
+    assert "😴 The queue" in result.output
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────
@@ -1211,6 +1214,7 @@ def test_nodes_empty_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
     assert "absented" in result.output or "notice" in result.output
+    assert "🚪 The household" in result.output
 
 
 def test_nodes_shows_labels(monkeypatch):

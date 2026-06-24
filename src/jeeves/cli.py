@@ -1,6 +1,6 @@
 """jeeves — a Jenkins CI/CD butler.
 
-Good morning, sir. I shall attend to your Jenkins affairs with the
+Good morning. I shall attend to your Jenkins affairs with the
 utmost discretion and efficiency.
 """
 
@@ -128,7 +128,7 @@ _token_opt = click.option(
 
 @click.group(
     epilog=(
-        "Made with ❤️  in the UK using the five-clis framework "
+        "Made with ❤️ in the UK using the five-clis framework "
         "— https://github.com/mrsixw/five-clis"
     ),
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -249,7 +249,7 @@ def main(
 ):
     """🎩 jeeves — your Jenkins CI/CD butler.
 
-    Good morning, sir. How may Jeeves be of assistance?
+    Good morning. How may Jeeves be of assistance?
     """
     configure_logging()
     colour = not no_colour
@@ -319,7 +319,7 @@ def main(
     if ctx.invoked_subcommand is None:
         spinner = random.choice(_BUTLER_ITEMS)
         greeting = (
-            f"{spinner}  Good morning. " "How may Jeeves be of assistance? Try --help."
+            f"{spinner} Good morning. " "How may Jeeves be of assistance? Try --help."
         )
         if seasonal_colours and not no_colour:
             greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
@@ -459,7 +459,7 @@ def _type_table_cell(label: str, colour: bool) -> str:
 
 
 def _render_type_key() -> str:
-    lines = [click.style("🗝️  Job type reference", fg="cyan", bold=True), ""]
+    lines = [click.style("🗝️ Job type reference", fg="cyan", bold=True), ""]
     entries = (
         [
             ("📁 folder", "Jenkins folder or multi-branch project"),
@@ -829,7 +829,7 @@ def jobs(
         columns,
         header="📋 Allow me to present the staff roster.",
         empty=(
-            "The staff roster appears entirely bare. "
+            "🗒️ The staff roster appears entirely bare. "
             "Jenkins would seem to have no positions filled at present."
         ),
         tree_fn=lambda recs: _job_tree(ctx, recs, root_label),
@@ -1012,8 +1012,8 @@ def builds_summary(
         ctx,
         records,
         _build_columns(ctx, include_permalink=True),
-        header=f"🛠️  The build record for '{job}', sir.",
-        empty=f"'{job}' has no builds on record yet, sir. A clean slate.",
+        header=f"🛠️ The build record for '{job}'.",
+        empty=f"🆕 '{job}' has no builds on record yet. A clean slate.",
     )
 
 
@@ -1059,8 +1059,8 @@ def builds_list(
         ctx,
         records,
         _build_columns(ctx),
-        header=f"🛠️  The recent builds of '{job}', sir.",
-        empty=f"'{job}' has no builds matching that description, sir.",
+        header=f"🛠️ The recent builds of '{job}'.",
+        empty=f"🔍 '{job}' has no builds matching that description.",
     )
 
 
@@ -1092,8 +1092,8 @@ def builds_show(
         ctx,
         records,
         _build_columns(ctx),
-        header=f"🛠️  Build {build} of '{job}', sir.",
-        empty=f"I could find no build '{build}' for '{job}', sir.",
+        header=f"🛠️ Build {build} of '{job}'.",
+        empty=f"🤷 I could find no build '{build}' for '{job}'.",
     )
 
 
@@ -1159,8 +1159,8 @@ def params(
         ctx,
         records,
         columns,
-        header=f"📝 The instructions for '{job}', sir.",
-        empty=f"'{job}' requires no special instructions, sir. Simply say the word.",
+        header=f"📝 The instructions for '{job}'.",
+        empty=f"🗒️ '{job}' requires no special instructions. Simply say the word.",
     )
 
 
@@ -1225,7 +1225,7 @@ def rebuild(
         info = client.build_info(job, build_id)
         if info is None:
             _butler_error(
-                f"There is no build on record to repeat for '{job}', sir.",
+                f"There is no build on record to repeat for '{job}'.",
                 ctx.colour,
             )
             sys.exit(1)
@@ -1343,7 +1343,7 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         columns,
         header="⏳ The pending requests.",
         empty=(
-            "The queue stands quite empty. Jenkins is evidently at leisure "
+            "😴 The queue stands quite empty. Jenkins is evidently at leisure "
             "— a rare and precious state of affairs."
         ),
     )
@@ -1386,9 +1386,7 @@ def cancel(
         sys.exit(1)
 
     click.echo(
-        click.style(
-            f"🛑 Consider build #{build_id} of '{job}' dismissed, sir.", fg="green"
-        ),
+        click.style(f"🛑 Consider build #{build_id} of '{job}' dismissed.", fg="green"),
         color=ctx.colour,
     )
 
@@ -1475,7 +1473,7 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         columns,
         header="🏠 The household staff.",
         empty=(
-            "The household staff appears to have entirely absented themselves. "
+            "🚪 The household staff appears to have entirely absented themselves. "
             "One trusts they haven't all handed in their notice."
         ),
     )

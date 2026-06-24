@@ -36,7 +36,9 @@
 - Nested jobs: encode `folder/job` as `job/folder/job/job` in URL paths (use `_normalize_jenkins_path`)
 
 ## Tone and Personality
-This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout, but avoid addressing the user as "sir" in every routine message; reserve it for error messages where the apologetic tone is most natural.
+This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
+- **Every** Jeeves-voiced message — success, info, empty state, and error — leads with a single emoji followed by **one** space (never a double space).
+- Avoid addressing the user as "sir" in routine (success/info/empty) messages; reserve it for errors, and use it **at most once** per message.
 
 ### Butler Voice
 **Success / info messages** — always include an emoji:
@@ -48,10 +50,10 @@ This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, 
 - Nodes header: `"🏠 The household staff."`
 - Whoami: `"👤 Authenticated as: {id} ({fullName})"`
 
-**Empty results** — whimsical, never just "none found":
-- No jobs: `"The staff roster appears entirely bare. Jenkins would seem to have no positions filled at present."`
-- Empty queue: `"The queue stands quite empty. Jenkins is evidently at leisure — a rare and precious state of affairs."`
-- No nodes: `"The household staff appears to have entirely absented themselves. One trusts they haven't all handed in their notice."`
+**Empty results** — whimsical, never just "none found"; always lead with an emoji:
+- No jobs: `"🗒️ The staff roster appears entirely bare. Jenkins would seem to have no positions filled at present."`
+- Empty queue: `"😴 The queue stands quite empty. Jenkins is evidently at leisure — a rare and precious state of affairs."`
+- No nodes: `"🚪 The household staff appears to have entirely absented themselves. One trusts they haven't all handed in their notice."`
 
 **Errors** — route through `_butler_error(msg, colour)`, prefixed with `🎩`, sent to stderr. Errors retain "sir" for the apologetic butler tone:
 - Connection failure: `"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, sir. The line seems entirely dead."`
