@@ -921,7 +921,19 @@ def _build_record(permalink: str, label: str, info: dict | None) -> dict:
     }
 
 
-def _build_columns(ctx: _Ctx) -> list[Column]:
+def _raw_build_record(info: dict) -> dict:
+    """Semantic record for a build dict from the builds list."""
+    return {
+        "number": info.get("number"),
+        "result": info.get("result"),
+        "building": bool(info.get("building", False)),
+        "timestamp": info.get("timestamp"),
+        "duration": info.get("duration"),
+        "url": info.get("url"),
+    }
+
+
+def _build_columns(ctx: _Ctx, include_permalink: bool = False) -> list[Column]:
     def build_table(r: dict, i: int) -> str:
         if r["number"] is None:
             return "—"
@@ -935,8 +947,10 @@ def _build_columns(ctx: _Ctx) -> list[Column]:
     def build_plain(r: dict) -> str:
         return "" if r["number"] is None else f"#{r['number']}"
 
-    return [
-        Column("permalink", "Permalink"),
+    cols = []
+    if include_permalink:
+        cols.append(Column("permalink", "Permalink"))
+    cols += [
         Column("number", "Build", table=build_table, plain=build_plain),
         Column(
             "result",
@@ -959,39 +973,33 @@ def _build_columns(ctx: _Ctx) -> list[Column]:
             plain=lambda r: _format_duration(r["duration"]),
         ),
     ]
+    return cols
 
 
-@main.command()
+@main.group(invoke_without_command=False)
+def builds() -> None:
+    """Inspect a job's builds: summary, full history, or a single build."""
+
+
+@builds.command("summary")
 @click.argument("job")
 @_url_opt
 @_user_opt
 @_token_opt
-@click.option(
-    "--build",
-    "build_id",
-    default=None,
-    metavar="N",
-    help="Show one specific build number instead of the permalink summary.",
-)
 @click.pass_obj
-def builds(
+def builds_summary(
     ctx: _Ctx,
     job: str,
     url: str | None,
     user: str | None,
     token: str | None,
-    build_id: str | None,
 ) -> None:
     """Show a job's last, last-successful, and last-failed builds."""
     client = _make_client(ctx, url, user, token)
     try:
-        if build_id is not None:
-            targets = [(build_id, f"#{build_id}")]
-        else:
-            targets = _BUILD_PERMALINKS
         records = [
             _build_record(permalink, label, client.build_info(job, permalink))
-            for permalink, label in targets
+            for permalink, label in _BUILD_PERMALINKS
         ]
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
@@ -1003,9 +1011,89 @@ def builds(
     _emit(
         ctx,
         records,
-        _build_columns(ctx),
+        _build_columns(ctx, include_permalink=True),
         header=f"🛠️  The build record for '{job}', sir.",
         empty=f"'{job}' has no builds on record yet, sir. A clean slate.",
+    )
+
+
+@builds.command("list")
+@click.argument("job")
+@_url_opt
+@_user_opt
+@_token_opt
+@click.option(
+    "--limit", default=20, metavar="N", type=int, help="Maximum builds to show."
+)
+@click.option(
+    "--result",
+    "result_filter",
+    default=None,
+    metavar="RESULT",
+    help="Only builds with this result (e.g. SUCCESS, FAILURE, UNSTABLE).",
+)
+@click.pass_obj
+def builds_list(
+    ctx: _Ctx,
+    job: str,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+    limit: int,
+    result_filter: str | None,
+) -> None:
+    """Show a job's recent build history (newest first)."""
+    client = _make_client(ctx, url, user, token)
+    try:
+        raw = client.builds(job, limit=limit)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    records = [_raw_build_record(b) for b in raw]
+    if result_filter:
+        wanted = result_filter.upper()
+        records = [r for r in records if (r["result"] or "") == wanted]
+
+    _emit(
+        ctx,
+        records,
+        _build_columns(ctx),
+        header=f"🛠️  The recent builds of '{job}', sir.",
+        empty=f"'{job}' has no builds matching that description, sir.",
+    )
+
+
+@builds.command("show")
+@click.argument("job")
+@click.argument("build", default="lastBuild")
+@_url_opt
+@_user_opt
+@_token_opt
+@click.pass_obj
+def builds_show(
+    ctx: _Ctx,
+    job: str,
+    build: str,
+    url: str | None,
+    user: str | None,
+    token: str | None,
+) -> None:
+    """Show a single build (by number, or a permalink like lastBuild)."""
+    client = _make_client(ctx, url, user, token)
+    try:
+        info = client.build_info(job, build)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    records = [_raw_build_record(info)] if info is not None else []
+    _emit(
+        ctx,
+        records,
+        _build_columns(ctx),
+        header=f"🛠️  Build {build} of '{job}', sir.",
+        empty=f"I could find no build '{build}' for '{job}', sir.",
     )
 
 
