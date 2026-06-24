@@ -39,6 +39,10 @@ class _Ctx:
     template: str | None = None
 
 
+# Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
+pass_ctx = click.make_pass_decorator(_Ctx)
+
+
 def _isatty() -> bool:
     """Whether stdout is an interactive terminal (seam for testing)."""
     return sys.stdout.isatty()
@@ -121,6 +125,11 @@ _token_opt = click.option(
     envvar="JEEVES_TOKEN",
     help="Jenkins API token (overrides config).",
 )
+
+
+def connection_options(f):
+    """Bundle the shared --url/--user/--token options onto a command."""
+    return _url_opt(_user_opt(_token_opt(f)))
 
 
 # ── Group ────────────────────────────────────────────────────────────────────
@@ -345,10 +354,8 @@ def main(
 
 
 @main.command()
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
     """Check Jenkins server health."""
     client = _make_client(ctx, url, user, token)
@@ -766,9 +773,7 @@ def _emit(
 
 
 @main.command()
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--folder", default=None, metavar="NAME", help="Limit to a Jenkins folder."
 )
@@ -794,7 +799,7 @@ def _emit(
     is_eager=True,
     help="Print the job-type icon reference and exit.",
 )
-@click.pass_obj
+@pass_ctx
 def jobs(
     ctx: _Ctx,
     url: str | None,
@@ -842,9 +847,7 @@ def jobs(
 
 @main.command()
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--param",
     "params",
@@ -852,7 +855,7 @@ def jobs(
     metavar="KEY=VALUE",
     help="Build parameter in KEY=VALUE format. Repeatable.",
 )
-@click.pass_obj
+@pass_ctx
 def build(
     ctx: _Ctx,
     job: str,
@@ -983,10 +986,8 @@ def builds() -> None:
 
 @builds.command("summary")
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def builds_summary(
     ctx: _Ctx,
     job: str,
@@ -1019,9 +1020,7 @@ def builds_summary(
 
 @builds.command("list")
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--limit", default=20, metavar="N", type=int, help="Maximum builds to show."
 )
@@ -1032,7 +1031,7 @@ def builds_summary(
     metavar="RESULT",
     help="Only builds with this result (e.g. SUCCESS, FAILURE, UNSTABLE).",
 )
-@click.pass_obj
+@pass_ctx
 def builds_list(
     ctx: _Ctx,
     job: str,
@@ -1067,10 +1066,8 @@ def builds_list(
 @builds.command("show")
 @click.argument("job")
 @click.argument("build", default="lastBuild")
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def builds_show(
     ctx: _Ctx,
     job: str,
@@ -1124,10 +1121,8 @@ def _param_records(job_json: dict) -> list[dict]:
 
 @main.command()
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def params(
     ctx: _Ctx,
     job: str,
@@ -1182,9 +1177,7 @@ def _params_from_build(info: dict) -> dict[str, str]:
 
 @main.command()
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1199,7 +1192,7 @@ def _params_from_build(info: dict) -> dict[str, str]:
     metavar="KEY=VALUE",
     help="Override a parameter for the rebuild. Repeatable.",
 )
-@click.pass_obj
+@pass_ctx
 def rebuild(
     ctx: _Ctx,
     job: str,
@@ -1247,9 +1240,7 @@ def rebuild(
 
 @main.command()
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1257,7 +1248,7 @@ def rebuild(
     metavar="N",
     help="Build number (default: lastBuild).",
 )
-@click.pass_obj
+@pass_ctx
 def log(
     ctx: _Ctx,
     job: str,
@@ -1284,10 +1275,8 @@ def log(
 
 
 @main.command()
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
     """Show the Jenkins build queue."""
     client = _make_client(ctx, url, user, token)
@@ -1354,9 +1343,7 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
 @main.command()
 @click.argument("job")
-@_url_opt
-@_user_opt
-@_token_opt
+@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1365,7 +1352,7 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     metavar="N",
     help="Build number to cancel.",
 )
-@click.pass_obj
+@pass_ctx
 def cancel(
     ctx: _Ctx,
     job: str,
@@ -1395,10 +1382,8 @@ def cancel(
 
 
 @main.command()
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
     """List Jenkins build nodes (agents)."""
     client = _make_client(ctx, url, user, token)
@@ -1483,10 +1468,8 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
 
 @main.command()
-@_url_opt
-@_user_opt
-@_token_opt
-@click.pass_obj
+@connection_options
+@pass_ctx
 def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
     """Show the currently authenticated Jenkins user."""
     client = _make_client(ctx, url, user, token)
@@ -1524,7 +1507,7 @@ def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
 
 
 @main.command()
-@click.pass_obj
+@pass_ctx
 def swatch(ctx: _Ctx) -> None:
     """Show colour swatches and iconography reference for the current terminal."""
     from .ui import HOLI_RAINBOW, PRIDE_RAINBOW, SEASONAL_PALETTES
