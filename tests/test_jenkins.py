@@ -158,6 +158,18 @@ def test_job_returns_detail(client: JenkinsClient) -> None:
     assert data["name"] == "my-pipeline"
 
 
+def test_builds_returns_list_with_tree_range(client: JenkinsClient) -> None:
+    payload = {"builds": [{"number": 5, "result": "SUCCESS"}, {"number": 4}]}
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/api/json", json=payload)
+        result = client.builds("my-pipeline", limit=10)
+    assert [b["number"] for b in result] == [5, 4]
+    # the tree range selector caps the build list server-side
+    tree = m.last_request.qs["tree"][0]
+    assert "builds[" in tree
+    assert "{0,10}" in tree
+
+
 def test_build_info_returns_data(client: JenkinsClient) -> None:
     with req_mock.Mocker() as m:
         m.get(

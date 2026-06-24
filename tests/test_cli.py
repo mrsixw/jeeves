@@ -848,7 +848,13 @@ def _build_info_mock(monkeypatch, mapping):
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "build_info", _info)
 
 
-def test_builds_table(monkeypatch):
+def _builds_list_mock(monkeypatch, builds):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "builds", lambda self, job, limit=20: builds[:limit]
+    )
+
+
+def test_builds_summary_table(monkeypatch):
     _build_info_mock(
         monkeypatch,
         {
@@ -868,7 +874,7 @@ def test_builds_table(monkeypatch):
             "lastFailedBuild": None,
         },
     )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "builds", "summary", "deploy")
     assert result.exit_code == 0
     assert "#142" in result.stdout
     assert "Success" in result.stdout
@@ -878,7 +884,7 @@ def test_builds_table(monkeypatch):
     assert "build record" in result.stderr
 
 
-def test_builds_json(monkeypatch):
+def test_builds_summary_json(monkeypatch):
     _build_info_mock(
         monkeypatch,
         {
@@ -887,7 +893,9 @@ def test_builds_json(monkeypatch):
             "lastFailedBuild": {"number": 9, "result": "FAILURE", "building": False},
         },
     )
-    result = _invoke("--no-update-check", "--format", "json", "builds", "deploy")
+    result = _invoke(
+        "--no-update-check", "--format", "json", "builds", "summary", "deploy"
+    )
     assert result.exit_code == 0
     data = _json.loads(result.stdout)
     by_permalink = {r["permalink"]: r for r in data}
@@ -896,15 +904,89 @@ def test_builds_json(monkeypatch):
     assert by_permalink["successful"]["number"] is None
 
 
-def test_builds_none_shows_empty_state(monkeypatch):
+def test_builds_summary_none_shows_empty_state(monkeypatch):
     _build_info_mock(
         monkeypatch,
         {"lastBuild": None, "lastSuccessfulBuild": None, "lastFailedBuild": None},
     )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "builds", "summary", "deploy")
     assert result.exit_code == 0
     assert "no builds on record" in result.stderr
     assert result.stdout.strip() == ""
+
+
+def test_builds_list_table(monkeypatch):
+    _builds_list_mock(
+        monkeypatch,
+        [
+            {"number": 142, "result": "SUCCESS", "building": False},
+            {"number": 141, "result": "FAILURE", "building": False},
+            {"number": 140, "result": "SUCCESS", "building": False},
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
+    assert result.exit_code == 0
+    assert "#142" in result.stdout
+    assert "#141" in result.stdout
+    assert "#140" in result.stdout
+    # no Permalink column in list view
+    assert "Permalink" not in result.stdout
+
+
+def test_builds_list_result_filter(monkeypatch):
+    _builds_list_mock(
+        monkeypatch,
+        [
+            {"number": 142, "result": "SUCCESS", "building": False},
+            {"number": 141, "result": "FAILURE", "building": False},
+        ],
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "builds",
+        "list",
+        "deploy",
+        "--result",
+        "failure",
+    )
+    assert result.exit_code == 0
+    assert "#141" in result.stdout
+    assert "#142" not in result.stdout
+
+
+def test_builds_list_passes_limit(monkeypatch):
+    captured = {}
+
+    def _builds(self, job, limit=20):
+        captured["limit"] = limit
+        return []
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "builds", _builds)
+    result = _invoke("--no-update-check", "builds", "list", "deploy", "--limit", "5")
+    assert result.exit_code == 0
+    assert captured["limit"] == 5
+
+
+def test_builds_show_single(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {"7": {"number": 7, "result": "SUCCESS", "building": False}},
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "builds", "show", "deploy", "7"
+    )
+    assert result.exit_code == 0
+    assert "#7" in result.stdout
+
+
+def test_builds_show_missing(monkeypatch):
+    _build_info_mock(monkeypatch, {})
+    result = _invoke(
+        "--no-colour", "--no-update-check", "builds", "show", "deploy", "999"
+    )
+    assert result.exit_code == 0
+    assert "could find no build" in result.stderr
 
 
 # ── params ────────────────────────────────────────────────────────────────────

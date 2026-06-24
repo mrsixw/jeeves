@@ -32,12 +32,14 @@ jeeves --no-seasonal-colours            # disable entirely
 ## Working with builds
 
 ```bash
-jeeves builds my-pipeline               # last / successful / failed builds
-jeeves builds my-pipeline --build 142   # a specific build
-jeeves --format json builds my-pipeline # structured output for scripting
-jeeves params my-pipeline               # list the job's build parameters
+jeeves builds summary my-pipeline            # last / successful / failed builds
+jeeves builds list my-pipeline               # recent build history
+jeeves builds list my-pipeline --limit 50 --result FAILURE
+jeeves builds show my-pipeline 142           # a specific build
+jeeves --format json builds list my-pipeline # structured output for scripting
+jeeves params my-pipeline                    # list the job's build parameters
 jeeves build my-pipeline --param ENV=prod
-jeeves rebuild my-pipeline              # re-run lastBuild with its parameters
+jeeves rebuild my-pipeline                   # re-run lastBuild with its parameters
 jeeves rebuild my-pipeline --param ENV=staging   # ...overriding one of them
 ```
 

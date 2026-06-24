@@ -111,6 +111,16 @@ class JenkinsClient:
         """Fetch a job's detail JSON (parameters, builds, properties)."""
         return self._get(_normalize_jenkins_path(job))
 
+    def builds(self, job: str, limit: int = 20) -> list[dict]:
+        """Fetch a job's recent builds (newest first), capped at ``limit``.
+
+        Uses the Jenkins ``tree`` range selector so only ``limit`` builds are
+        pulled server-side rather than the whole history.
+        """
+        path = _normalize_jenkins_path(job)
+        tree = f"builds[number,result,timestamp,duration,url,building]{{0,{limit}}}"
+        return self._get(path, params={"tree": tree}).get("builds", [])
+
     def build_info(self, job: str, build: int | str = "lastBuild") -> dict | None:
         """Fetch a build's detail JSON by number or permalink.
 
