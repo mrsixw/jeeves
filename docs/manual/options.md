@@ -1,5 +1,18 @@
 # Options Reference
 
+## Connection
+
+`--url`, `--user`, and `--token` are **global** flags — give them before the
+command:
+
+```bash
+jeeves --url https://ci.example.com --user me --token *** jobs
+```
+
+They override the config file, and each has an environment variable
+(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). Config keys live under
+`[jenkins]` in `config.toml`.
+
 ## Display options
 
 ### `--theme`

@@ -753,9 +753,9 @@ def test_jobs_hyperlinks_job_url(monkeypatch):
     )
     result = _invoke(
         "--no-update-check",
-        "jobs",
         "--url",
         "http://jenkins.example.com",
+        "jobs",
         "--no-weather",
         color=True,
     )
@@ -803,9 +803,9 @@ def test_nodes_hyperlinks_node_url(monkeypatch):
     )
     result = _invoke(
         "--no-update-check",
-        "nodes",
         "--url",
         "http://jenkins.example.com",
+        "nodes",
         color=True,
     )
     assert result.exit_code == 0
