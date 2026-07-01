@@ -1399,3 +1399,241 @@ def test_whoami_error_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "whoami")
     assert result.exit_code == 1
     assert "unreachable" in result.output
+
+
+# ── test-report ───────────────────────────────────────────────────────────────
+
+_REPORT_DATA = {
+    "passCount": 5,
+    "failCount": 2,
+    "skipCount": 1,
+    "duration": 3.14,
+    "suites": [
+        {
+            "cases": [
+                {
+                    "status": "FAILED",
+                    "className": "com.example.FooTest",
+                    "name": "testFoo",
+                    "errorDetails": "AssertionError: expected true",
+                    "duration": 0.1,
+                },
+                {
+                    "status": "PASSED",
+                    "className": "com.example.BarTest",
+                    "name": "testBar",
+                    "errorDetails": None,
+                    "duration": 0.05,
+                },
+                {
+                    "status": "SKIPPED",
+                    "className": "com.example.BazTest",
+                    "name": "testBaz",
+                    "errorDetails": None,
+                    "duration": 0.0,
+                },
+            ]
+        }
+    ],
+}
+
+
+def _test_report_mock(monkeypatch, return_value):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": return_value,
+    )
+
+
+def test_test_report_summary_on_stderr(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "Tests:" in result.stderr
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_cases_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" in result.stdout
+
+
+def test_test_report_no_report_shows_butler_message(monkeypatch):
+    _test_report_mock(monkeypatch, None)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "No test report was filed" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_failed_only_filters_cases(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" not in result.stdout
+    assert "testBaz" not in result.stdout
+
+
+def test_test_report_failed_only_no_failures_empty(monkeypatch):
+    all_passed = {
+        "passCount": 3,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, all_passed)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "No failed tests" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_json_format(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    records = _json.loads(result.stdout)
+    assert isinstance(records, list)
+    assert len(records) == 3
+    keys = set(records[0].keys())
+    assert {"class_name", "name", "status", "duration", "error"}.issubset(keys)
+
+
+def test_test_report_jenkins_error_exits_1(monkeypatch):
+    def _raise(self, job, build="lastBuild"):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 1
+    assert "unreachable" in result.output
+
+
+def test_test_report_default_build_passes_lastBuild(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert captured["build"] == "lastBuild"
+
+
+def test_test_report_specific_build_number(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "test-report",
+        "my-pipeline",
+        "--build",
+        "42",
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == "42"
+
+
+def test_test_report_summary_not_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_snippet_truncated(monkeypatch):
+    long_error = "x" * 100
+    data = {
+        "passCount": 0,
+        "failCount": 1,
+        "skipCount": 0,
+        "duration": 0.1,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "FAILED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": long_error,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "..." in result.stdout
+
+
+def test_test_report_duration_formatted(monkeypatch):
+    data = {
+        "passCount": 1,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.123,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke("--no-colour", "--no-update-check", "test-report", "my-pipeline")
+    assert result.exit_code == 0
+    assert "0.123s" in result.stdout

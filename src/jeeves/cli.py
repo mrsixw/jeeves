@@ -611,6 +611,49 @@ def _node_stat_fields(monitor_data: dict) -> dict:
     }
 
 
+_SNIPPET_LEN = 80
+
+_TEST_STATUS_MAP: dict[str, tuple[str, str]] = {
+    "PASSED": ("green", "✅"),
+    "FIXED": ("green", "✅"),
+    "FAILED": ("red", "❌"),
+    "REGRESSION": ("red", "❌"),
+    "SKIPPED": ("yellow", "⏭️"),
+}
+
+
+def _format_test_status(status: str, colour: bool) -> str:
+    fg, emoji = _TEST_STATUS_MAP.get(status.upper(), ("white", "❓"))
+    text = f"{emoji} {status.lower()}"
+    return click.style(text, fg=fg, bold=True) if colour else text
+
+
+def _test_snippet(error: str | None) -> str:
+    if not error:
+        return ""
+    s = error.replace("\n", " ").strip()
+    return s[: _SNIPPET_LEN - 3] + "..." if len(s) > _SNIPPET_LEN else s
+
+
+def _test_case_records(data: dict, failed_only: bool) -> list[dict]:
+    records: list[dict] = []
+    for suite in data.get("suites", []):
+        for case in suite.get("cases", []):
+            status = (case.get("status") or "").upper()
+            if failed_only and status not in ("FAILED", "REGRESSION"):
+                continue
+            records.append(
+                {
+                    "class_name": case.get("className", ""),
+                    "name": case.get("name", ""),
+                    "status": status,
+                    "duration": case.get("duration"),
+                    "error": _test_snippet(case.get("errorDetails")),
+                }
+            )
+    return records
+
+
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
     """Parse repeated KEY=VALUE strings into a dict (raises ValueError on a bad one)."""
     parsed: dict[str, str] = {}
@@ -1273,6 +1316,100 @@ def log(
         sys.exit(1)
 
     click.echo(text, nl=False)
+
+
+# ── test-report ─────────────────────────────────────────────────────────────
+
+
+@main.command("test-report")
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    default="lastBuild",
+    metavar="N",
+    help="Build number or permalink (default: lastBuild).",
+)
+@click.option(
+    "--failed-only",
+    "failed_only",
+    is_flag=True,
+    default=False,
+    help="Show only FAILED/REGRESSION cases; default shows all cases.",
+)
+@pass_ctx
+def test_report(
+    ctx: _Ctx,
+    job: str,
+    build_id: str,
+    failed_only: bool,
+) -> None:
+    """Show the JUnit test report for a build.
+
+    JOB is the job name. Use --build to specify a build number or permalink.
+    """
+    client = _make_client(ctx)
+    try:
+        data = client.test_report(job, build_id)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    if data is None:
+        click.echo(
+            click.style(
+                "📋 No test report was filed for that build. "
+                "Perhaps the test stage was skipped entirely.",
+                fg="yellow",
+            ),
+            err=True,
+            color=ctx.colour,
+        )
+        return
+
+    pass_count = data.get("passCount", 0)
+    fail_count = data.get("failCount", 0)
+    skip_count = data.get("skipCount", 0)
+    duration = data.get("duration", 0.0)
+    click.echo(
+        click.style(
+            f"🧪 Tests: {pass_count} passed, {fail_count} failed, "
+            f"{skip_count} skipped — {duration:.2f}s",
+            fg="cyan",
+        ),
+        err=True,
+        color=ctx.colour,
+    )
+
+    records = _test_case_records(data, failed_only)
+
+    def status_table(r: dict, _i: int) -> str:
+        return _format_test_status(r["status"], ctx.colour)
+
+    def duration_table(r: dict, _i: int) -> str:
+        return f"{r['duration']:.3f}s" if r["duration"] is not None else "—"
+
+    def duration_plain(r: dict) -> str:
+        return f"{r['duration']:.3f}s" if r["duration"] is not None else ""
+
+    columns = [
+        Column("class_name", "Class"),
+        Column("name", "Test"),
+        Column("status", "Status", table=status_table),
+        Column(
+            "duration",
+            "Duration",
+            table=duration_table,
+            plain=duration_plain,
+        ),
+        Column("error", "Error"),
+    ]
+    empty = (
+        "✅ No failed tests to report. The suite passed without incident."
+        if failed_only
+        else "✅ The test suite has no cases on record for this build."
+    )
+    _emit(ctx, records, columns, header="📋 Test cases:", empty=empty)
 
 
 # ── queue ───────────────────────────────────────────────────────────────────
