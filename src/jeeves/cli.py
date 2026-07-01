@@ -37,6 +37,7 @@ class _Ctx:
     seasonal_calendar: str = "western"
     fmt: str = "table"
     template: str | None = None
+    quiet: bool = False
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
@@ -48,7 +49,10 @@ def _isatty() -> bool:
     return sys.stdout.isatty()
 
 
-def _butler_error(msg: str, colour: bool) -> None:
+def _butler_error(msg: str, colour: bool, quiet: bool = False) -> None:
+    if quiet:
+        click.echo(f"Error: {msg}", err=True)
+        return
     if "requires browser login at" in msg:
         url = msg.split("requires browser login at ", 1)[-1].strip()
         text = (
@@ -239,6 +243,13 @@ def connection_options(f):
     envvar=f"{_ENVVAR_PREFIX}_NO_UPDATE_CHECK",
     help="Disable the automatic update check.",
 )
+@click.option(
+    "--quiet",
+    is_flag=True,
+    default=False,
+    envvar=f"{_ENVVAR_PREFIX}_QUIET",
+    help="Suppress butler personality output (greeting, headers, empty states).",
+)
 @click.pass_context
 def main(
     ctx,
@@ -255,6 +266,7 @@ def main(
     cache,
     cache_ttl,
     no_update_check,
+    quiet,
 ):
     """🎩 jeeves — your Jenkins CI/CD butler.
 
@@ -321,31 +333,37 @@ def main(
         seasonal_calendar=seasonal_calendar or "western",
         fmt=output_format,
         template=output_template,
+        quiet=quiet,
     )
     ctx.ensure_object(_Ctx)
 
     # ── Bare invocation: greet the user ───────────────────────────────────
     if ctx.invoked_subcommand is None:
-        spinner = random.choice(_BUTLER_ITEMS)
-        greeting = (
-            f"{spinner} Good morning. " "How may Jeeves be of assistance? Try --help."
-        )
-        if seasonal_colours and not no_colour:
-            greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
-        elif not no_colour:
-            greeting = active_theme.apply(greeting, role="primary")
-        click.echo(greeting, err=True, color=colour)
+        if not quiet:
+            spinner = random.choice(_BUTLER_ITEMS)
+            greeting = (
+                f"{spinner} Good morning. "
+                "How may Jeeves be of assistance? Try --help."
+            )
+            if seasonal_colours and not no_colour:
+                greeting = apply_seasonal_colour(
+                    greeting, 0, calendar=seasonal_calendar
+                )
+            elif not no_colour:
+                greeting = active_theme.apply(greeting, role="primary")
+            click.echo(greeting, err=True, color=colour)
         return
 
     # ── Update check (runs after the subcommand via close callback) ────────
     if not no_update_check:
 
         def _check() -> None:
-            msg = check_for_update()
-            if msg:
-                click.echo(
-                    click.style(msg, fg="cyan", bold=True), err=True, color=colour
-                )
+            if not quiet:
+                msg = check_for_update()
+                if msg:
+                    click.echo(
+                        click.style(msg, fg="cyan", bold=True), err=True, color=colour
+                    )
 
         ctx.call_on_close(_check)
 
@@ -362,7 +380,7 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     try:
         data = client.status()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     desc = data.get("nodeDescription", "Jenkins")
@@ -370,11 +388,12 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     executors = data.get("numExecutors", "?")
     jobs_count = len(data.get("jobs", []))
 
-    click.echo(
-        click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
-        err=True,
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
+            err=True,
+            color=ctx.colour,
+        )
     mode_str = (
         click.style(mode, fg="green", bold=True)
         if ctx.colour and mode.upper() == "NORMAL"
@@ -740,16 +759,16 @@ def _emit(
     decorative = ctx.fmt in ("table", "tree")
 
     if not records:
-        if decorative:
-            click.echo(empty, err=True)
-        else:
+        if decorative and not ctx.quiet:
+            click.echo(empty, err=True, color=ctx.colour)
+        elif not decorative:
             click.echo(
                 _render.render(ctx.fmt, [], columns, template=ctx.template),
                 color=ctx.colour,
             )
         return
 
-    if decorative:
+    if decorative and not ctx.quiet:
         click.echo(click.style(header, fg="cyan"), err=True, color=ctx.colour)
 
     cc = (
@@ -767,7 +786,7 @@ def _emit(
             compress_col=cc,
         )
     except ValueError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
     click.echo(out, color=ctx.colour)
 
@@ -820,7 +839,7 @@ def jobs(
     try:
         job_list = client.jobs(folder=folder, depth=depth)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = _collect_job_records(
@@ -871,24 +890,30 @@ def build(
     try:
         param_dict = _parse_params(params)
     except ValueError as exc:
-        click.echo(
-            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
-            err=True,
-            color=ctx.colour,
-        )
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
     client = _make_client(ctx, url, user, token)
     try:
         client.build(job, params=param_dict or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    click.echo(
-        click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
+            color=ctx.colour,
+        )
 
 
 # ── builds ───────────────────────────────────────────────────────────────────
@@ -1003,7 +1028,7 @@ def builds_summary(
             for permalink, label in _BUILD_PERMALINKS
         ]
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     if all(r["number"] is None for r in records):
@@ -1046,7 +1071,7 @@ def builds_list(
     try:
         raw = client.builds(job, limit=limit)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = [_raw_build_record(b) for b in raw]
@@ -1081,7 +1106,7 @@ def builds_show(
     try:
         info = client.build_info(job, build)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = [_raw_build_record(info)] if info is not None else []
@@ -1135,7 +1160,7 @@ def params(
     try:
         job_json = client.job(job)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = _param_records(job_json)
@@ -1206,11 +1231,16 @@ def rebuild(
     try:
         override_dict = _parse_params(overrides)
     except ValueError as exc:
-        click.echo(
-            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
-            err=True,
-            color=ctx.colour,
-        )
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
     client = _make_client(ctx, url, user, token)
@@ -1220,19 +1250,21 @@ def rebuild(
             _butler_error(
                 f"There is no build on record to repeat for '{job}'.",
                 ctx.colour,
+                ctx.quiet,
             )
             sys.exit(1)
         merged = {**_params_from_build(info), **override_dict}
         client.build(job, params=merged or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    message = f"🔁 Once more, with feeling — re-running '{job}'."
-    click.echo(click.style(message, fg="green"), color=ctx.colour)
-    if merged:
-        summary = ", ".join(f"{k}={v}" for k, v in merged.items())
-        click.echo(f"   with: {summary}", color=ctx.colour)
+    if not ctx.quiet:
+        message = f"🔁 Once more, with feeling — re-running '{job}'."
+        click.echo(click.style(message, fg="green"), color=ctx.colour)
+        if merged:
+            summary = ", ".join(f"{k}={v}" for k, v in merged.items())
+            click.echo(f"   with: {summary}", color=ctx.colour)
 
 
 # ── log ─────────────────────────────────────────────────────────────────────
@@ -1265,7 +1297,7 @@ def log(
     try:
         text = client.log(job, build=build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     click.echo(text, nl=False)
@@ -1283,7 +1315,7 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     try:
         items = client.queue()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = []
@@ -1369,13 +1401,16 @@ def cancel(
     try:
         client.cancel(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    click.echo(
-        click.style(f"🛑 Consider build #{build_id} of '{job}' dismissed.", fg="green"),
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(
+                f"🛑 Consider build #{build_id} of '{job}' dismissed.", fg="green"
+            ),
+            color=ctx.colour,
+        )
 
 
 # ── nodes ───────────────────────────────────────────────────────────────────
@@ -1390,7 +1425,7 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     try:
         node_list = client.nodes()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     built_in = {"master", "Built-In Node"}
@@ -1476,7 +1511,7 @@ def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     try:
         data = client.whoami()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     user_id = data.get("id", "anonymous")

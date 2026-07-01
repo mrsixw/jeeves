@@ -1313,3 +1313,84 @@ def test_whoami_error_shows_butler_message(monkeypatch):
     result = _invoke("--no-colour", "--no-update-check", "whoami")
     assert result.exit_code == 1
     assert "unreachable" in result.output
+
+
+# ── --quiet ───────────────────────────────────────────────────────────────────
+
+
+def test_quiet_suppresses_greeting():
+    result = _invoke("--no-colour", "--no-update-check", "--quiet")
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_quiet_suppresses_jobs_header(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "roster" not in result.stderr
+    assert "deploy-prod" in result.stdout
+
+
+def test_quiet_empty_state_suppressed(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert result.stderr.strip() == ""
+    assert result.stdout.strip() == ""
+
+
+def test_quiet_butler_error_is_plain(monkeypatch):
+    def _raise(self, folder=None, depth=0):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "--quiet", "jobs")
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "unreachable" not in result.output
+    assert "sir" not in result.output
+
+
+def test_quiet_build_success_silent(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
+    result = _invoke("--no-colour", "--no-update-check", "--quiet", "build", "my-job")
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_quiet_envvar_suppresses_greeting(monkeypatch):
+    monkeypatch.setenv("JEEVES_QUIET", "1")
+    result = _invoke("--no-colour", "--no-update-check")
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_quiet_does_not_suppress_data(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {"name": "deploy-prod", "color": "blue"},
+            {"name": "test-suite", "color": "red"},
+        ],
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "deploy-prod" in result.stdout
+    assert "test-suite" in result.stdout

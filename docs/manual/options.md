@@ -39,6 +39,20 @@ Config key: `seasonal-calendar = "western"`
 
 Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
 
+### `--quiet`
+
+Suppress all butler personality output: the bare-invocation greeting, per-command headers, empty-state messages, and update-check notices. Errors are reduced to `Error: <message>` on stderr. Data tables and command output are unaffected.
+
+Useful for scripting when you only want the data and don't need the butler commentary.
+
+```bash
+jeeves --quiet jobs          # table only, no headers or greeting
+jeeves --quiet build my-job  # exits 0 silently on success
+JEEVES_QUIET=1 jeeves jobs  # same via environment variable
+```
+
+Config key: `quiet = true`
+
 ## Output formats
 
 ### `--format`
@@ -56,6 +70,7 @@ stays clean and pipe-friendly.
 | `markdown` | GitHub-flavoured Markdown table for PRs, docs, and Slack. |
 | `csv` / `tsv` | Delimited rows for spreadsheets and `cut`/`awk`. |
 | `template` | Custom one-line-per-row output (see `--template`). |
+| `plain` | Plain-text table, semantic values only — no emoji, ANSI colour, or hyperlinks. Human-readable equivalent of `csv` for terminal use. |
 
 ```bash
 jeeves --format json jobs | jq '.[] | select(.status == "failed")'
