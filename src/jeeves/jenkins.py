@@ -115,10 +115,17 @@ class JenkinsClient:
         """Fetch a job's recent builds (newest first), capped at ``limit``.
 
         Uses the Jenkins ``tree`` range selector so only ``limit`` builds are
-        pulled server-side rather than the whole history.
+        pulled server-side rather than the whole history. Also pulls each
+        build's parameters and causes so callers can inspect or filter on
+        them without a second round-trip per build.
         """
         path = _normalize_jenkins_path(job)
-        tree = f"builds[number,result,timestamp,duration,url,building]{{0,{limit}}}"
+        tree = (
+            "builds[number,result,timestamp,duration,url,building,"
+            "actions[parameters[name,value],"
+            "causes[shortDescription,userId,upstreamProject,upstreamBuild]]]"
+            f"{{0,{limit}}}"
+        )
         return self._get(path, params={"tree": tree}).get("builds", [])
 
     def build_info(self, job: str, build: int | str = "lastBuild") -> dict | None:

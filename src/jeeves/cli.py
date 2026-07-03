@@ -952,6 +952,24 @@ def _build_record(permalink: str, label: str, info: dict | None) -> dict:
     }
 
 
+def _causes_from_build(info: dict) -> list[dict]:
+    """Extract the causes (why a build ran) from a build's actions."""
+    causes = []
+    for action in info.get("actions", []):
+        if "CauseAction" not in action.get("_class", ""):
+            continue
+        for c in action.get("causes", []):
+            causes.append(
+                {
+                    "description": c.get("shortDescription", ""),
+                    "userId": c.get("userId"),
+                    "upstreamProject": c.get("upstreamProject"),
+                    "upstreamBuild": c.get("upstreamBuild"),
+                }
+            )
+    return causes
+
+
 def _raw_build_record(info: dict) -> dict:
     """Semantic record for a build dict from the builds list."""
     return {
@@ -961,10 +979,14 @@ def _raw_build_record(info: dict) -> dict:
         "timestamp": info.get("timestamp"),
         "duration": info.get("duration"),
         "url": info.get("url"),
+        "params": _params_from_build(info),
+        "causes": _causes_from_build(info),
     }
 
 
-def _build_columns(ctx: _Ctx, include_permalink: bool = False) -> list[Column]:
+def _build_columns(
+    ctx: _Ctx, include_permalink: bool = False, include_details: bool = False
+) -> list[Column]:
     def build_table(r: dict, i: int) -> str:
         if r["number"] is None:
             return "—"
@@ -1004,6 +1026,23 @@ def _build_columns(ctx: _Ctx, include_permalink: bool = False) -> list[Column]:
             plain=lambda r: _format_duration(r["duration"]),
         ),
     ]
+    if include_details:
+        cols.append(
+            Column(
+                "params",
+                "Parameters",
+                plain=lambda r: ", ".join(f"{k}={v}" for k, v in r["params"].items()),
+            )
+        )
+        cols.append(
+            Column(
+                "causes",
+                "Causes",
+                plain=lambda r: "; ".join(
+                    c["description"] for c in r["causes"] if c["description"]
+                ),
+            )
+        )
     return cols
 
 
@@ -1054,14 +1093,32 @@ def builds_summary(
     metavar="RESULT",
     help="Only builds with this result (e.g. SUCCESS, FAILURE, UNSTABLE).",
 )
+@click.option(
+    "--param",
+    "param_filters",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Only builds with this parameter value. Repeatable (all must match).",
+)
 @pass_ctx
 def builds_list(
     ctx: _Ctx,
     job: str,
     limit: int,
     result_filter: str | None,
+    param_filters: tuple[str, ...],
 ) -> None:
     """Show a job's recent build history (newest first)."""
+    try:
+        filter_dict = _parse_params(param_filters)
+    except ValueError as exc:
+        click.echo(
+            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
+            err=True,
+            color=ctx.colour,
+        )
+        sys.exit(1)
+
     client = _make_client(ctx)
     try:
         raw = client.builds(job, limit=limit)
@@ -1073,11 +1130,17 @@ def builds_list(
     if result_filter:
         wanted = result_filter.upper()
         records = [r for r in records if (r["result"] or "") == wanted]
+    if filter_dict:
+        records = [
+            r
+            for r in records
+            if all(r["params"].get(k) == v for k, v in filter_dict.items())
+        ]
 
     _emit(
         ctx,
         records,
-        _build_columns(ctx),
+        _build_columns(ctx, include_details=bool(filter_dict)),
         header=f"🛠️ The recent builds of '{job}'.",
         empty=f"🔍 '{job}' has no builds matching that description.",
     )
@@ -1104,7 +1167,7 @@ def builds_show(
     _emit(
         ctx,
         records,
-        _build_columns(ctx),
+        _build_columns(ctx, include_details=True),
         header=f"🛠️ Build {build} of '{job}'.",
         empty=f"🤷 I could find no build '{build}' for '{job}'.",
     )
