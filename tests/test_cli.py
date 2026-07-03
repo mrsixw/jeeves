@@ -1,4 +1,5 @@
 import json as _json
+import re
 
 from click.testing import CliRunner
 
@@ -11,6 +12,23 @@ from jeeves.jenkins import JenkinsError
 def _invoke(*args, **kwargs):
     runner = CliRunner()
     return runner.invoke(main, list(args), **kwargs)
+
+
+def _listed_commands(help_output: str) -> set[str]:
+    """Command names listed in a --help output's Commands section."""
+    names = set()
+    in_commands = False
+    for line in help_output.splitlines():
+        if line.strip() == "Commands:":
+            in_commands = True
+            continue
+        if in_commands:
+            match = re.match(r"\s+(\S+)\s", line)
+            if match:
+                names.add(match.group(1))
+            elif line.strip() == "":
+                break
+    return names
 
 
 # ── Infrastructure ───────────────────────────────────────────────────────────
@@ -27,8 +45,8 @@ def test_help():
     assert result.exit_code == 0
     assert "--theme" in result.output
     assert "--completion" in result.output
-    assert "status" in result.output
-    assert "jobs" in result.output
+    listed = _listed_commands(result.output)
+    assert {"status", "job", "build", "node", "queue", "whoami"} <= listed
 
 
 def test_help_shows_five_clis_credit():
@@ -231,7 +249,7 @@ def test_jobs_shows_roster(monkeypatch):
         "jobs",
         lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "deploy-prod" in result.output
     assert "roster" in result.output
@@ -258,7 +276,7 @@ def test_jobs_format_json(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-update-check", "--format", "json", "jobs")
+    result = _invoke("--no-update-check", "--format", "json", "job", "list")
     assert result.exit_code == 0
     data = _json.loads(result.stdout)
     assert data[0]["name"] == "deploy"
@@ -274,7 +292,9 @@ def test_jobs_format_ndjson_one_per_line(monkeypatch):
         monkeypatch,
         [{"name": "a", "color": "blue"}, {"name": "b", "color": "red"}],
     )
-    result = _invoke("--no-update-check", "--format", "ndjson", "jobs", "--no-weather")
+    result = _invoke(
+        "--no-update-check", "--format", "ndjson", "job", "list", "--no-weather"
+    )
     assert result.exit_code == 0
     lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 2
@@ -283,7 +303,9 @@ def test_jobs_format_ndjson_one_per_line(monkeypatch):
 
 def test_jobs_format_csv(monkeypatch):
     _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
-    result = _invoke("--no-update-check", "--format", "csv", "jobs", "--no-weather")
+    result = _invoke(
+        "--no-update-check", "--format", "csv", "job", "list", "--no-weather"
+    )
     assert result.exit_code == 0
     lines = result.stdout.splitlines()
     assert lines[0] == "Job,Type,Status"
@@ -293,7 +315,7 @@ def test_jobs_format_csv(monkeypatch):
 def test_jobs_format_markdown(monkeypatch):
     _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
     result = _invoke(
-        "--no-update-check", "--format", "markdown", "jobs", "--no-weather"
+        "--no-update-check", "--format", "markdown", "job", "list", "--no-weather"
     )
     assert result.exit_code == 0
     assert "|" in result.stdout
@@ -308,7 +330,8 @@ def test_jobs_format_template(monkeypatch):
         "template",
         "--template",
         "{name}={status}",
-        "jobs",
+        "job",
+        "list",
         "--no-weather",
     )
     assert result.exit_code == 0
@@ -317,7 +340,7 @@ def test_jobs_format_template(monkeypatch):
 
 def test_jobs_format_template_requires_template(monkeypatch):
     _jobs_mock(monkeypatch, [{"name": "deploy", "color": "blue"}])
-    result = _invoke("--no-update-check", "--format", "template", "jobs")
+    result = _invoke("--no-update-check", "--format", "template", "job", "list")
     assert result.exit_code == 1
     assert "template" in result.output
 
@@ -337,7 +360,13 @@ def test_jobs_format_tree_expand(monkeypatch):
 
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _mock)
     result = _invoke(
-        "--no-colour", "--no-update-check", "--format", "tree", "jobs", "--expand"
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "tree",
+        "job",
+        "list",
+        "--expand",
     )
     assert result.exit_code == 0
     assert "jenkins" in result.stdout
@@ -349,7 +378,7 @@ def test_jobs_format_tree_expand(monkeypatch):
 
 def test_jobs_format_json_empty_is_array(monkeypatch):
     _jobs_mock(monkeypatch, [])
-    result = _invoke("--no-update-check", "--format", "json", "jobs")
+    result = _invoke("--no-update-check", "--format", "json", "job", "list")
     assert result.exit_code == 0
     assert result.stdout.strip() == "[]"
 
@@ -358,7 +387,7 @@ def test_nodes_format_json_labels_as_list(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent1",
                 "offline": False,
@@ -371,7 +400,7 @@ def test_nodes_format_json_labels_as_list(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-update-check", "--format", "json", "nodes")
+    result = _invoke("--no-update-check", "--format", "json", "node", "list")
     assert result.exit_code == 0
     data = _json.loads(result.stdout)
     assert data[0]["labels"] == ["linux", "docker"]
@@ -400,7 +429,7 @@ def test_jobs_header_on_stderr_data_on_stdout(monkeypatch):
         "jobs",
         lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     # decorative butler header goes to stderr only
     assert "roster" in result.stderr
@@ -413,7 +442,7 @@ def test_jobs_empty_state_on_stderr(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "bare" in result.stderr
     assert result.stdout.strip() == ""
@@ -436,9 +465,11 @@ def test_nodes_header_on_stderr_data_on_stdout(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "household staff" in result.stderr
     assert "household staff" not in result.stdout
@@ -482,7 +513,7 @@ def test_jobs_shows_status_labels(monkeypatch):
             {"name": "d", "color": "grey"},
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "passed" in result.output
     assert "failed" in result.output
@@ -501,7 +532,7 @@ def test_jobs_shows_folder_icon(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "my-folder" in result.output
     assert "folder" in result.output
@@ -529,7 +560,7 @@ def test_jobs_shows_type_icons(monkeypatch):
             },
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "🔁" in result.output
     assert "🔧" in result.output
@@ -548,7 +579,7 @@ def test_jobs_type_workflow_job(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "🔁" in result.output
     assert "pipeline" in result.output
@@ -566,7 +597,7 @@ def test_jobs_type_freestyle_project(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "🔧" in result.output
     assert "freestyle" in result.output
@@ -584,7 +615,7 @@ def test_jobs_type_matrix_project(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "🔢" in result.output
     assert "matrix" in result.output
@@ -602,7 +633,7 @@ def test_jobs_type_unknown_fallback(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "🔨" in result.output
     assert "job" in result.output
@@ -619,7 +650,7 @@ def test_jobs_type_folder_icon(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "📁" in result.output
     assert "folder" in result.output
@@ -631,7 +662,7 @@ def test_jobs_type_key_flag(monkeypatch):
         "jobs",
         lambda self, folder=None, depth=0: [],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--type-key")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--type-key")
     assert result.exit_code == 0
     assert "🔁" in result.output
     assert "🔧" in result.output
@@ -671,7 +702,7 @@ def test_jobs_expand_recurses_into_folders(monkeypatch):
 
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _mock_jobs)
     result = _invoke(
-        "--no-colour", "--no-update-check", "jobs", "--expand", "--no-weather"
+        "--no-colour", "--no-update-check", "job", "list", "--expand", "--no-weather"
     )
     assert result.exit_code == 0
     assert "my-folder" in result.output
@@ -700,7 +731,7 @@ def test_jobs_shows_weather_column(monkeypatch):
             },
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list")
     assert result.exit_code == 0
     assert "Weather" in result.output
     assert "sunny" in result.output
@@ -714,7 +745,7 @@ def test_jobs_no_weather_skips_column(monkeypatch):
         "jobs",
         lambda self, folder=None, depth=0: [{"name": "x", "color": "blue"}],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "Weather" not in result.output
 
@@ -723,7 +754,7 @@ def test_jobs_empty_shows_butler_message(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list")
     assert result.exit_code == 0
     assert "bare" in result.output or "positions" in result.output
     # every Jeeves-voiced message leads with an emoji (no double space after it)
@@ -753,9 +784,10 @@ def test_jobs_hyperlinks_job_url(monkeypatch):
     )
     result = _invoke(
         "--no-update-check",
-        "jobs",
         "--url",
         "http://jenkins.example.com",
+        "job",
+        "list",
         "--no-weather",
         color=True,
     )
@@ -770,7 +802,7 @@ def test_jobs_no_colour_no_hyperlinks(monkeypatch):
         "jobs",
         lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
     )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
     assert result.exit_code == 0
     assert "\x1b]8;;" not in result.output
 
@@ -799,13 +831,16 @@ def test_nodes_hyperlinks_node_url(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
     result = _invoke(
         "--no-update-check",
-        "nodes",
         "--url",
         "http://jenkins.example.com",
+        "node",
+        "list",
         color=True,
     )
     assert result.exit_code == 0
@@ -819,7 +854,9 @@ def test_build_success_shows_dispatch_message(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
     )
-    result = _invoke("--no-colour", "--no-update-check", "build", "my-pipeline")
+    result = _invoke(
+        "--no-colour", "--no-update-check", "job", "trigger", "my-pipeline"
+    )
     assert result.exit_code == 0
     assert (
         "dispatch" in result.output
@@ -832,7 +869,8 @@ def test_build_bad_param_format(monkeypatch):
     result = _invoke(
         "--no-colour",
         "--no-update-check",
-        "build",
+        "job",
+        "trigger",
         "my-pipeline",
         "--param",
         "no-equals-sign",
@@ -876,7 +914,7 @@ def test_builds_summary_table(monkeypatch):
             "lastFailedBuild": None,
         },
     )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "summary", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "summary", "deploy")
     assert result.exit_code == 0
     assert "#142" in result.stdout
     assert "Success" in result.stdout
@@ -896,7 +934,7 @@ def test_builds_summary_json(monkeypatch):
         },
     )
     result = _invoke(
-        "--no-update-check", "--format", "json", "builds", "summary", "deploy"
+        "--no-update-check", "--format", "json", "build", "summary", "deploy"
     )
     assert result.exit_code == 0
     data = _json.loads(result.stdout)
@@ -911,7 +949,7 @@ def test_builds_summary_none_shows_empty_state(monkeypatch):
         monkeypatch,
         {"lastBuild": None, "lastSuccessfulBuild": None, "lastFailedBuild": None},
     )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "summary", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "summary", "deploy")
     assert result.exit_code == 0
     assert "no builds on record" in result.stderr
     assert result.stdout.strip() == ""
@@ -926,7 +964,7 @@ def test_builds_list_table(monkeypatch):
             {"number": 140, "result": "SUCCESS", "building": False},
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
     assert result.exit_code == 0
     assert "#142" in result.stdout
     assert "#141" in result.stdout
@@ -946,7 +984,7 @@ def test_builds_list_result_filter(monkeypatch):
     result = _invoke(
         "--no-colour",
         "--no-update-check",
-        "builds",
+        "build",
         "list",
         "deploy",
         "--result",
@@ -965,7 +1003,7 @@ def test_builds_list_passes_limit(monkeypatch):
         return []
 
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "builds", _builds)
-    result = _invoke("--no-update-check", "builds", "list", "deploy", "--limit", "5")
+    result = _invoke("--no-update-check", "build", "list", "deploy", "--limit", "5")
     assert result.exit_code == 0
     assert captured["limit"] == 5
 
@@ -975,9 +1013,7 @@ def test_builds_show_single(monkeypatch):
         monkeypatch,
         {"7": {"number": 7, "result": "SUCCESS", "building": False}},
     )
-    result = _invoke(
-        "--no-colour", "--no-update-check", "builds", "show", "deploy", "7"
-    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "show", "deploy", "7")
     assert result.exit_code == 0
     assert "#7" in result.stdout
 
@@ -985,10 +1021,140 @@ def test_builds_show_single(monkeypatch):
 def test_builds_show_missing(monkeypatch):
     _build_info_mock(monkeypatch, {})
     result = _invoke(
-        "--no-colour", "--no-update-check", "builds", "show", "deploy", "999"
+        "--no-colour", "--no-update-check", "build", "show", "deploy", "999"
     )
     assert result.exit_code == 0
     assert "could find no build" in result.stderr
+
+
+def test_builds_show_exposes_params_and_causes_table(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "7": {
+                "number": 7,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [
+                            {"name": "CHANGE_ID", "value": "12345"},
+                            {"name": "WAVE", "value": "2"},
+                        ],
+                    },
+                    {
+                        "_class": "hudson.model.CauseAction",
+                        "causes": [
+                            {
+                                "shortDescription": "Started by user bob",
+                                "userId": "bob",
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "show", "deploy", "7")
+    assert result.exit_code == 0
+    assert "CHANGE_ID=12345" in result.stdout
+    assert "WAVE=2" in result.stdout
+    assert "Started by user bob" in result.stdout
+
+
+def test_builds_show_exposes_params_and_causes_json(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "7": {
+                "number": 7,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "12345"}],
+                    },
+                    {
+                        "_class": "hudson.model.CauseAction",
+                        "causes": [
+                            {
+                                "shortDescription": "Started by project foo #3",
+                                "upstreamProject": "foo",
+                                "upstreamBuild": 3,
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+    result = _invoke(
+        "--no-update-check", "--format", "json", "build", "show", "deploy", "7"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["params"] == {"CHANGE_ID": "12345"}
+    assert data[0]["causes"][0]["upstreamProject"] == "foo"
+    assert data[0]["causes"][0]["upstreamBuild"] == 3
+
+
+def test_builds_list_param_filter(monkeypatch):
+    _builds_list_mock(
+        monkeypatch,
+        [
+            {
+                "number": 142,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "abc"}],
+                    }
+                ],
+            },
+            {
+                "number": 141,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "xyz"}],
+                    }
+                ],
+            },
+        ],
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "list",
+        "deploy",
+        "--param",
+        "CHANGE_ID=abc",
+    )
+    assert result.exit_code == 0
+    assert "#142" in result.stdout
+    assert "#141" not in result.stdout
+
+
+def test_builds_list_param_filter_bad_format(monkeypatch):
+    _builds_list_mock(monkeypatch, [])
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "list",
+        "deploy",
+        "--param",
+        "not-a-kv",
+    )
+    assert result.exit_code == 1
+    assert "KEY=VALUE" in result.stderr
 
 
 # ── params ────────────────────────────────────────────────────────────────────
@@ -1023,7 +1189,7 @@ def test_params_table(monkeypatch):
             ]
         },
     )
-    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "job", "params", "deploy")
     assert result.exit_code == 0
     assert "BRANCH" in result.stdout
     assert "string" in result.stdout
@@ -1049,7 +1215,7 @@ def test_params_json_types(monkeypatch):
             ]
         },
     )
-    result = _invoke("--no-update-check", "--format", "json", "params", "deploy")
+    result = _invoke("--no-update-check", "--format", "json", "job", "params", "deploy")
     assert result.exit_code == 0
     data = _json.loads(result.stdout)
     assert data[0]["name"] == "DEBUG"
@@ -1059,7 +1225,7 @@ def test_params_json_types(monkeypatch):
 
 def test_params_unparameterised_empty_state(monkeypatch):
     _job_detail_mock(monkeypatch, {"property": []})
-    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "job", "params", "deploy")
     assert result.exit_code == 0
     assert "no special instructions" in result.stderr
     assert result.stdout.strip() == ""
@@ -1096,7 +1262,7 @@ def test_rebuild_carries_previous_params(monkeypatch):
         ]
     }
     captured = _rebuild_mocks(monkeypatch, info)
-    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "rebuild", "deploy")
     assert result.exit_code == 0
     assert captured["params"] == {"BRANCH": "main", "DEBUG": "false"}
 
@@ -1112,7 +1278,13 @@ def test_rebuild_override_wins(monkeypatch):
     }
     captured = _rebuild_mocks(monkeypatch, info)
     result = _invoke(
-        "--no-colour", "--no-update-check", "rebuild", "deploy", "--param", "BRANCH=dev"
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "rebuild",
+        "deploy",
+        "--param",
+        "BRANCH=dev",
     )
     assert result.exit_code == 0
     assert captured["params"] == {"BRANCH": "dev"}
@@ -1120,14 +1292,14 @@ def test_rebuild_override_wins(monkeypatch):
 
 def test_rebuild_no_params_plain(monkeypatch):
     captured = _rebuild_mocks(monkeypatch, {"actions": []})
-    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "rebuild", "deploy")
     assert result.exit_code == 0
     assert captured["params"] is None
 
 
 def test_rebuild_missing_build_errors(monkeypatch):
     _rebuild_mocks(monkeypatch, None)
-    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    result = _invoke("--no-colour", "--no-update-check", "build", "rebuild", "deploy")
     assert result.exit_code == 1
     assert "no build on record" in result.output
 
@@ -1169,14 +1341,18 @@ def test_queue_empty_shows_butler_message(monkeypatch):
 
 
 def test_cancel_shows_dismissed_message(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient, "cancel", lambda self, job, build: None
-    )
+    captured = {}
+
+    def _cancel(self, job, build):
+        captured["build"] = build
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "cancel", _cancel)
     result = _invoke(
-        "--no-colour", "--no-update-check", "cancel", "my-pipeline", "--build", "5"
+        "--no-colour", "--no-update-check", "build", "cancel", "my-pipeline", "5"
     )
     assert result.exit_code == 0
     assert "dismissed" in result.output
+    assert captured["build"] == 5
 
 
 # ── nodes ─────────────────────────────────────────────────────────────────────
@@ -1186,9 +1362,11 @@ def test_nodes_shows_household_staff(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "agent1" in result.output
     assert "household" in result.output
@@ -1198,30 +1376,110 @@ def test_nodes_shows_online_offline_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {"displayName": "up", "offline": False, "numExecutors": 2},
             {"displayName": "down", "offline": True, "numExecutors": 0},
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "online" in result.output
     assert "offline" in result.output
 
 
 def test_nodes_empty_shows_butler_message(monkeypatch):
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", lambda self: [])
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [])
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "absented" in result.output or "notice" in result.output
     assert "🚪 The household" in result.output
+
+
+_GB = 1024**3
+
+
+def _stats_node(**monitors):
+    return {
+        "displayName": "agent-1",
+        "offline": False,
+        "numExecutors": 4,
+        "assignedLabels": [{"name": "agent-1"}, {"name": "linux"}],
+        "monitorData": monitors,
+    }
+
+
+def test_nodes_stats_table(monkeypatch):
+    node = _stats_node(
+        **{
+            "hudson.node_monitors.DiskSpaceMonitor": {"size": 3 * _GB, "path": "/"},
+            "hudson.node_monitors.TemporarySpaceMonitor": {"size": 50 * _GB},
+            "hudson.node_monitors.SwapSpaceMonitor": {"availableSwapSpace": 2 * _GB},
+            "hudson.node_monitors.ResponseTimeMonitor": {"average": 42},
+            "hudson.node_monitors.ArchitectureMonitor": "Linux (amd64)",
+        }
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--stats")
+    assert result.exit_code == 0
+    # stats columns present, executors/labels columns dropped
+    assert "Disk" in result.stdout
+    assert "Response" in result.stdout
+    assert "3.0 GB" in result.stdout
+    assert "42ms" in result.stdout
+    assert "Linux (amd64)" in result.stdout
+    assert "Labels" not in result.stdout
+
+
+def test_nodes_stats_handles_missing_monitors(monkeypatch):
+    node = _stats_node()  # no monitorData entries
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--stats")
+    assert result.exit_code == 0
+    # unreported monitors render as a dash, no crash
+    assert "—" in result.stdout
+
+
+def test_nodes_stats_json_raw_values(monkeypatch):
+    node = _stats_node(
+        **{
+            "hudson.node_monitors.DiskSpaceMonitor": {"size": 3 * _GB},
+            "hudson.node_monitors.ResponseTimeMonitor": {"average": 42},
+        }
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-update-check", "--format", "json", "node", "list", "--stats")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["disk"] == 3 * _GB
+    assert data[0]["response_ms"] == 42
+    assert data[0]["swap"] is None
+
+
+def test_nodes_stats_requests_depth(monkeypatch):
+    captured = {}
+
+    def _nodes(self, depth=0):
+        captured["depth"] = depth
+        return []
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", _nodes)
+    _invoke("--no-update-check", "node", "list", "--stats")
+    assert captured["depth"] == 1
+    _invoke("--no-update-check", "node", "list")
+    assert captured["depth"] == 0
 
 
 def test_nodes_shows_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent-1",
                 "offline": False,
@@ -1234,7 +1492,7 @@ def test_nodes_shows_labels(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "Labels" in result.output
     assert "linux" in result.output
@@ -1245,7 +1503,7 @@ def test_nodes_filters_own_name_from_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "build-node",
                 "offline": False,
@@ -1254,7 +1512,7 @@ def test_nodes_filters_own_name_from_labels(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "java" in result.output
     # node name appears once (Node column) but not again in Labels column
@@ -1265,7 +1523,7 @@ def test_nodes_empty_labels_renders_blank(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent-1",
                 "offline": False,
@@ -1274,7 +1532,7 @@ def test_nodes_empty_labels_renders_blank(monkeypatch):
             }
         ],
     )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
     assert result.exit_code == 0
     assert "Labels" in result.output
 
@@ -1315,6 +1573,467 @@ def test_whoami_error_shows_butler_message(monkeypatch):
     assert "unreachable" in result.output
 
 
+# ── test-report ───────────────────────────────────────────────────────────────
+
+_REPORT_DATA = {
+    "passCount": 5,
+    "failCount": 2,
+    "skipCount": 1,
+    "duration": 3.14,
+    "suites": [
+        {
+            "cases": [
+                {
+                    "status": "FAILED",
+                    "className": "com.example.FooTest",
+                    "name": "testFoo",
+                    "errorDetails": "AssertionError: expected true",
+                    "duration": 0.1,
+                },
+                {
+                    "status": "PASSED",
+                    "className": "com.example.BarTest",
+                    "name": "testBar",
+                    "errorDetails": None,
+                    "duration": 0.05,
+                },
+                {
+                    "status": "SKIPPED",
+                    "className": "com.example.BazTest",
+                    "name": "testBaz",
+                    "errorDetails": None,
+                    "duration": 0.0,
+                },
+            ]
+        }
+    ],
+}
+
+
+def _test_report_mock(monkeypatch, return_value):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": return_value,
+    )
+
+
+def test_test_report_summary_on_stderr(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "Tests:" in result.stderr
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_cases_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" in result.stdout
+
+
+def test_test_report_no_report_shows_butler_message(monkeypatch):
+    _test_report_mock(monkeypatch, None)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "No test report was filed" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_failed_only_filters_cases(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" not in result.stdout
+    assert "testBaz" not in result.stdout
+
+
+def test_test_report_failed_only_no_failures_empty(monkeypatch):
+    all_passed = {
+        "passCount": 3,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, all_passed)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "No failed tests" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_json_format(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    records = _json.loads(result.stdout)
+    assert isinstance(records, list)
+    assert len(records) == 3
+    keys = set(records[0].keys())
+    assert {"class_name", "name", "status", "duration", "error"}.issubset(keys)
+
+
+def test_test_report_jenkins_error_exits_1(monkeypatch):
+    def _raise(self, job, build="lastBuild"):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _raise)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 1
+    assert "unreachable" in result.output
+
+
+def test_test_report_default_build_passes_lastBuild(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == "lastBuild"
+
+
+def test_test_report_specific_build_number(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "42",
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == "42"
+
+
+def test_test_report_summary_not_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_snippet_truncated(monkeypatch):
+    long_error = "x" * 100
+    data = {
+        "passCount": 0,
+        "failCount": 1,
+        "skipCount": 0,
+        "duration": 0.1,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "FAILED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": long_error,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "..." in result.stdout
+
+
+def test_test_report_duration_formatted(monkeypatch):
+    data = {
+        "passCount": 1,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.123,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "0.123s" in result.stdout
+
+
+# ── deprecated aliases ────────────────────────────────────────────────────────
+
+_NOTICE = "has moved to"
+
+
+def test_alias_jobs_works_and_warns(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "deploy-prod" in result.stdout
+    assert _NOTICE in result.stderr
+    assert "🎩" in result.stderr
+    assert _NOTICE not in result.stdout
+
+
+def test_alias_params_works_and_warns(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "job", lambda self, job: {"property": []}
+    )
+    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves job params JOB'" in result.stderr
+
+
+def test_alias_builds_group_works_and_warns(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "builds",
+        lambda self, job, limit=20: [
+            {"number": 3, "result": "SUCCESS", "building": False}
+        ],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
+    assert result.exit_code == 0
+    assert "#3" in result.stdout
+    assert "'jeeves build list JOB'" in result.stderr
+
+
+def test_alias_rebuild_works_and_warns(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "build_info",
+        lambda self, job, build="lastBuild": {"actions": []},
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
+    )
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves build rebuild JOB'" in result.stderr
+
+
+def test_alias_log_keeps_old_option_signature(monkeypatch):
+    captured = {}
+
+    def _log(self, job, build="lastBuild"):
+        captured["build"] = build
+        return "the log"
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "log", _log)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "log", "deploy", "--build", "7"
+    )
+    assert result.exit_code == 0
+    assert "the log" in result.stdout
+    assert captured["build"] == "7"
+    assert "'jeeves build log JOB [BUILD]'" in result.stderr
+
+
+def test_alias_cancel_keeps_old_option_signature(monkeypatch):
+    captured = {}
+
+    def _cancel(self, job, build):
+        captured["build"] = build
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "cancel", _cancel)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "cancel", "deploy", "--build", "5"
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == 5
+    assert "'jeeves build cancel JOB BUILD'" in result.stderr
+
+
+def test_alias_nodes_works_and_warns(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [{"displayName": "agent-1", "offline": False}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "agent-1" in result.stdout
+    assert "'jeeves node list'" in result.stderr
+
+
+def test_legacy_build_verb_falls_back_to_trigger(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "build",
+        lambda self, job, params=None: captured.update(job=job, params=params),
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "my-pipeline",
+        "--param",
+        "ENV=prod",
+    )
+    assert result.exit_code == 0
+    assert "dispatch" in result.stdout
+    assert captured == {"job": "my-pipeline", "params": {"ENV": "prod"}}
+    assert "'jeeves job trigger JOB'" in result.stderr
+
+
+def test_legacy_build_verb_nested_job_path(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "build",
+        lambda self, job, params=None: captured.update(job=job),
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
+    result = _invoke("--no-colour", "--no-update-check", "build", "folder/nested-job")
+    assert result.exit_code == 0
+    assert captured["job"] == "folder/nested-job"
+    assert _NOTICE in result.stderr
+
+
+def test_build_subcommand_takes_priority_over_fallback(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "builds", lambda self, job, limit=20: []
+    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
+
+
+def test_new_spellings_emit_no_notice(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy", "color": "blue"}],
+    )
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
+
+
+def test_bare_build_shows_group_usage():
+    result = _invoke("--no-colour", "--no-update-check", "build")
+    assert result.exit_code == 2
+
+
+def test_build_group_help_lists_subcommands():
+    result = _invoke("--no-colour", "--no-update-check", "build", "--help")
+    assert result.exit_code == 0
+    listed = _listed_commands(result.output)
+    assert {"list", "summary", "show", "log", "cancel", "rebuild"} <= listed
+    assert "build" not in listed
+
+
+def test_aliases_hidden_from_help():
+    result = _invoke("--help")
+    assert result.exit_code == 0
+    listed = _listed_commands(result.output)
+    old = {"jobs", "builds", "params", "rebuild", "log", "cancel", "nodes"}
+    assert not listed & old
+
+
+def test_build_log_new_positional_form(monkeypatch):
+    captured = {}
+
+    def _log(self, job, build="lastBuild"):
+        captured["build"] = build
+        return "console output"
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "log", _log)
+    result = _invoke("--no-colour", "--no-update-check", "build", "log", "deploy", "7")
+    assert result.exit_code == 0
+    assert "console output" in result.stdout
+    assert captured["build"] == "7"
+
+
+def test_build_log_defaults_to_last_build(monkeypatch):
+    captured = {}
+
+    def _log(self, job, build="lastBuild"):
+        captured["build"] = build
+        return ""
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "log", _log)
+    result = _invoke("--no-colour", "--no-update-check", "build", "log", "deploy")
+    assert result.exit_code == 0
+    assert captured["build"] == "lastBuild"
+
+
 # ── --quiet ───────────────────────────────────────────────────────────────────
 
 
@@ -1331,7 +2050,7 @@ def test_quiet_suppresses_jobs_header(monkeypatch):
         lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
     )
     result = _invoke(
-        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
     )
     assert result.exit_code == 0
     assert "roster" not in result.stderr
@@ -1343,7 +2062,7 @@ def test_quiet_empty_state_suppressed(monkeypatch):
         jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
     )
     result = _invoke(
-        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
     )
     assert result.exit_code == 0
     assert result.stderr.strip() == ""
@@ -1355,19 +2074,21 @@ def test_quiet_butler_error_is_plain(monkeypatch):
         raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
 
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _raise)
-    result = _invoke("--no-colour", "--no-update-check", "--quiet", "jobs")
+    result = _invoke("--no-colour", "--no-update-check", "--quiet", "job", "list")
     assert result.exit_code == 1
     assert "Error:" in result.output
     assert "unreachable" not in result.output
     assert "sir" not in result.output
 
 
-def test_quiet_build_success_silent(monkeypatch):
+def test_quiet_trigger_success_silent(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
     )
     monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
-    result = _invoke("--no-colour", "--no-update-check", "--quiet", "build", "my-job")
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "job", "trigger", "my-job"
+    )
     assert result.exit_code == 0
     assert result.stdout.strip() == ""
 
@@ -1389,7 +2110,7 @@ def test_quiet_does_not_suppress_data(monkeypatch):
         ],
     )
     result = _invoke(
-        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
     )
     assert result.exit_code == 0
     assert "deploy-prod" in result.stdout
@@ -1402,3 +2123,54 @@ def test_quiet_config_key_suppresses_greeting(tmp_path):
     result = _invoke("--no-colour", "--no-update-check", "--config", str(cfg_file))
     assert result.exit_code == 0
     assert result.output.strip() == ""
+
+
+def test_quiet_deprecation_notice_is_plain_warning(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "Warning:" in result.stderr
+    assert "has moved to" in result.stderr
+    assert "🎩" not in result.stderr
+
+
+def test_quiet_test_report_summary_suppressed(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": _REPORT_DATA,
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--quiet",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    assert "Tests:" not in result.stderr
+    assert "testFoo" in result.stdout
+
+
+def test_quiet_test_report_no_report_silent(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": None,
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--quiet",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    assert result.stderr.strip() == ""
+    assert result.stdout.strip() == ""

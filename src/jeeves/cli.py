@@ -6,6 +6,7 @@ utmost discretion and efficiency.
 
 from __future__ import annotations
 
+import functools
 import random
 import sys
 import time
@@ -38,6 +39,9 @@ class _Ctx:
     fmt: str = "table"
     template: str | None = None
     quiet: bool = False
+    url: str | None = None
+    user: str | None = None
+    token: str | None = None
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
@@ -100,40 +104,11 @@ def _butler_error(msg: str, colour: bool, quiet: bool = False) -> None:
     )
 
 
-def _make_client(
-    ctx: _Ctx, url: str | None, user: str | None, token: str | None
-) -> JenkinsClient:
+def _make_client(ctx: _Ctx) -> JenkinsClient:
     cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg)
-    return JenkinsClient(url or cfg_url, user or cfg_user, token or cfg_token)
-
-
-# ── Shared connection options ────────────────────────────────────────────────
-_url_opt = click.option(
-    "--url",
-    default=None,
-    metavar="URL",
-    envvar="JEEVES_URL",
-    help="Jenkins server URL (overrides config).",
-)
-_user_opt = click.option(
-    "--user",
-    default=None,
-    metavar="USER",
-    envvar="JEEVES_USER",
-    help="Jenkins username (overrides config).",
-)
-_token_opt = click.option(
-    "--token",
-    default=None,
-    metavar="TOKEN",
-    envvar="JEEVES_TOKEN",
-    help="Jenkins API token (overrides config).",
-)
-
-
-def connection_options(f):
-    """Bundle the shared --url/--user/--token options onto a command."""
-    return _url_opt(_user_opt(_token_opt(f)))
+    return JenkinsClient(
+        ctx.url or cfg_url, ctx.user or cfg_user, ctx.token or cfg_token
+    )
 
 
 # ── Group ────────────────────────────────────────────────────────────────────
@@ -148,6 +123,28 @@ def connection_options(f):
     invoke_without_command=True,
 )
 @click.version_option(package_name="jeeves")
+# ── Connection ─────────────────────────────────────────────────────────────
+@click.option(
+    "--url",
+    default=None,
+    metavar="URL",
+    envvar="JEEVES_URL",
+    help="Jenkins server URL (overrides config).",
+)
+@click.option(
+    "--user",
+    default=None,
+    metavar="USER",
+    envvar="JEEVES_USER",
+    help="Jenkins username (overrides config).",
+)
+@click.option(
+    "--token",
+    default=None,
+    metavar="TOKEN",
+    envvar="JEEVES_TOKEN",
+    help="Jenkins API token (overrides config).",
+)
 # ── Shell completions ──────────────────────────────────────────────────────
 @click.option(
     "--completion",
@@ -253,6 +250,9 @@ def connection_options(f):
 @click.pass_context
 def main(
     ctx,
+    url,
+    user,
+    token,
     completion_shell,
     config_path,
     do_show_config,
@@ -335,6 +335,9 @@ def main(
         fmt=output_format,
         template=output_template,
         quiet=quiet,
+        url=url,
+        user=user,
+        token=token,
     )
     ctx.ensure_object(_Ctx)
 
@@ -373,11 +376,10 @@ def main(
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def status(ctx: _Ctx) -> None:
     """Check Jenkins server health."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         data = client.status()
     except JenkinsError as exc:
@@ -413,7 +415,41 @@ def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> N
     click.echo(tabulate(rows, tablefmt="simple"), color=ctx.colour)
 
 
-# ── jobs ────────────────────────────────────────────────────────────────────
+# ── noun groups (job / build / node) ─────────────────────────────────────────
+
+
+class _BuildGroup(click.Group):
+    """`build` is a noun group, but the legacy verb `jeeves build JOB
+    [--param K=V]` still works: an unknown first token falls back to the
+    hidden deprecated trigger command; real subcommands take priority."""
+
+    def resolve_command(self, ctx, args):
+        if (
+            args
+            and not args[0].startswith("-")
+            and self.get_command(ctx, args[0]) is None
+        ):
+            # Return full `args` (not args[1:]) so the token becomes JOB.
+            return _LEGACY_BUILD_VERB.name, _LEGACY_BUILD_VERB, args
+        return super().resolve_command(ctx, args)
+
+
+@main.group()
+def job() -> None:
+    """Work with Jenkins jobs: list, parameters, trigger."""
+
+
+@main.group(cls=_BuildGroup)
+def build() -> None:
+    """Inspect and manage a job's builds."""
+
+
+@main.group("node")
+def node_group() -> None:
+    """Work with Jenkins build nodes (agents)."""
+
+
+# ── job list ─────────────────────────────────────────────────────────────────
 
 # (colour, label, emoji)
 _JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
@@ -593,6 +629,84 @@ def _format_duration(ms: int | None) -> str:
         return f"{minutes}m{secs:02d}s"
     hours, mins = divmod(minutes, 60)
     return f"{hours}h{mins:02d}m"
+
+
+def _format_bytes(num: int | None) -> str:
+    """Human byte size (e.g. '12.3 GB'), or '—' when unknown."""
+    if num is None:
+        return "—"
+    size = float(num)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _node_monitor(monitor_data: dict, name: str) -> dict | str | None:
+    """Read one monitor's value from a node's monitorData (None if absent/null)."""
+    return monitor_data.get(f"hudson.node_monitors.{name}")
+
+
+def _node_stat_fields(monitor_data: dict) -> dict:
+    """Parse a node's monitorData into flat semantic stat fields."""
+
+    def _size(name: str, key: str) -> int | None:
+        value = _node_monitor(monitor_data, name)
+        return value.get(key) if isinstance(value, dict) else None
+
+    arch = _node_monitor(monitor_data, "ArchitectureMonitor")
+    return {
+        "disk": _size("DiskSpaceMonitor", "size"),
+        "temp": _size("TemporarySpaceMonitor", "size"),
+        "swap": _size("SwapSpaceMonitor", "availableSwapSpace"),
+        "response_ms": _size("ResponseTimeMonitor", "average"),
+        "clock_ms": _size("ClockMonitor", "diff"),
+        "architecture": arch if isinstance(arch, str) else None,
+    }
+
+
+_SNIPPET_LEN = 80
+
+_TEST_STATUS_MAP: dict[str, tuple[str, str]] = {
+    "PASSED": ("green", "✅"),
+    "FIXED": ("green", "✅"),
+    "FAILED": ("red", "❌"),
+    "REGRESSION": ("red", "❌"),
+    "SKIPPED": ("yellow", "⏭️"),
+}
+
+
+def _format_test_status(status: str, colour: bool) -> str:
+    fg, emoji = _TEST_STATUS_MAP.get(status.upper(), ("white", "❓"))
+    text = f"{emoji} {status.lower()}"
+    return click.style(text, fg=fg, bold=True) if colour else text
+
+
+def _test_snippet(error: str | None) -> str:
+    if not error:
+        return ""
+    s = error.replace("\n", " ").strip()
+    return s[: _SNIPPET_LEN - 3] + "..." if len(s) > _SNIPPET_LEN else s
+
+
+def _test_case_records(data: dict, failed_only: bool) -> list[dict]:
+    records: list[dict] = []
+    for suite in data.get("suites", []):
+        for case in suite.get("cases", []):
+            status = (case.get("status") or "").upper()
+            if failed_only and status not in ("FAILED", "REGRESSION"):
+                continue
+            records.append(
+                {
+                    "class_name": case.get("className", ""),
+                    "name": case.get("name", ""),
+                    "status": status,
+                    "duration": case.get("duration"),
+                    "error": _test_snippet(case.get("errorDetails")),
+                }
+            )
+    return records
 
 
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
@@ -792,8 +906,7 @@ def _emit(
     click.echo(out, color=ctx.colour)
 
 
-@main.command()
-@connection_options
+@job.command("list")
 @click.option(
     "--folder", default=None, metavar="NAME", help="Limit to a Jenkins folder."
 )
@@ -820,11 +933,8 @@ def _emit(
     help="Print the job-type icon reference and exit.",
 )
 @pass_ctx
-def jobs(
+def job_list(
     ctx: _Ctx,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     folder: str | None,
     no_weather: bool,
     expand: bool,
@@ -835,7 +945,7 @@ def jobs(
         click.echo(_render_type_key(), color=ctx.colour)
         return
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     depth = 0 if no_weather else 1
     try:
         job_list = client.jobs(folder=folder, depth=depth)
@@ -862,12 +972,11 @@ def jobs(
     )
 
 
-# ── build ───────────────────────────────────────────────────────────────────
+# ── job trigger ──────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
-@connection_options
+@job.command("trigger")
+@click.argument("job_name", metavar="JOB")
 @click.option(
     "--param",
     "params",
@@ -876,12 +985,9 @@ def jobs(
     help="Build parameter in KEY=VALUE format. Repeatable.",
 )
 @pass_ctx
-def build(
+def job_trigger(
     ctx: _Ctx,
-    job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
+    job_name: str,
     params: tuple[str, ...],
 ) -> None:
     """Trigger a Jenkins build.
@@ -903,16 +1009,18 @@ def build(
             click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
-        client.build(job, params=param_dict or None)
+        client.build(job_name, params=param_dict or None)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     if not ctx.quiet:
         click.echo(
-            click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
+            click.style(
+                f"🚀 I shall dispatch '{job_name}' at once. Very good.", fg="green"
+            ),
             color=ctx.colour,
         )
 
@@ -950,6 +1058,24 @@ def _build_record(permalink: str, label: str, info: dict | None) -> dict:
     }
 
 
+def _causes_from_build(info: dict) -> list[dict]:
+    """Extract the causes (why a build ran) from a build's actions."""
+    causes = []
+    for action in info.get("actions", []):
+        if "CauseAction" not in action.get("_class", ""):
+            continue
+        for c in action.get("causes", []):
+            causes.append(
+                {
+                    "description": c.get("shortDescription", ""),
+                    "userId": c.get("userId"),
+                    "upstreamProject": c.get("upstreamProject"),
+                    "upstreamBuild": c.get("upstreamBuild"),
+                }
+            )
+    return causes
+
+
 def _raw_build_record(info: dict) -> dict:
     """Semantic record for a build dict from the builds list."""
     return {
@@ -959,10 +1085,14 @@ def _raw_build_record(info: dict) -> dict:
         "timestamp": info.get("timestamp"),
         "duration": info.get("duration"),
         "url": info.get("url"),
+        "params": _params_from_build(info),
+        "causes": _causes_from_build(info),
     }
 
 
-def _build_columns(ctx: _Ctx, include_permalink: bool = False) -> list[Column]:
+def _build_columns(
+    ctx: _Ctx, include_permalink: bool = False, include_details: bool = False
+) -> list[Column]:
     def build_table(r: dict, i: int) -> str:
         if r["number"] is None:
             return "—"
@@ -1002,27 +1132,35 @@ def _build_columns(ctx: _Ctx, include_permalink: bool = False) -> list[Column]:
             plain=lambda r: _format_duration(r["duration"]),
         ),
     ]
+    if include_details:
+        cols.append(
+            Column(
+                "params",
+                "Parameters",
+                plain=lambda r: ", ".join(f"{k}={v}" for k, v in r["params"].items()),
+            )
+        )
+        cols.append(
+            Column(
+                "causes",
+                "Causes",
+                plain=lambda r: "; ".join(
+                    c["description"] for c in r["causes"] if c["description"]
+                ),
+            )
+        )
     return cols
 
 
-@main.group(invoke_without_command=False)
-def builds() -> None:
-    """Inspect a job's builds: summary, full history, or a single build."""
-
-
-@builds.command("summary")
+@build.command("summary")
 @click.argument("job")
-@connection_options
 @pass_ctx
-def builds_summary(
+def build_summary(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
 ) -> None:
     """Show a job's last, last-successful, and last-failed builds."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         records = [
             _build_record(permalink, label, client.build_info(job, permalink))
@@ -1044,9 +1182,8 @@ def builds_summary(
     )
 
 
-@builds.command("list")
+@build.command("list")
 @click.argument("job")
-@connection_options
 @click.option(
     "--limit", default=20, metavar="N", type=int, help="Maximum builds to show."
 )
@@ -1057,18 +1194,38 @@ def builds_summary(
     metavar="RESULT",
     help="Only builds with this result (e.g. SUCCESS, FAILURE, UNSTABLE).",
 )
+@click.option(
+    "--param",
+    "param_filters",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Only builds with this parameter value. Repeatable (all must match).",
+)
 @pass_ctx
-def builds_list(
+def build_list(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     limit: int,
     result_filter: str | None,
+    param_filters: tuple[str, ...],
 ) -> None:
     """Show a job's recent build history (newest first)."""
-    client = _make_client(ctx, url, user, token)
+    try:
+        filter_dict = _parse_params(param_filters)
+    except ValueError as exc:
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
+        sys.exit(1)
+
+    client = _make_client(ctx)
     try:
         raw = client.builds(job, limit=limit)
     except JenkinsError as exc:
@@ -1079,33 +1236,35 @@ def builds_list(
     if result_filter:
         wanted = result_filter.upper()
         records = [r for r in records if (r["result"] or "") == wanted]
+    if filter_dict:
+        records = [
+            r
+            for r in records
+            if all(r["params"].get(k) == v for k, v in filter_dict.items())
+        ]
 
     _emit(
         ctx,
         records,
-        _build_columns(ctx),
+        _build_columns(ctx, include_details=bool(filter_dict)),
         header=f"🛠️ The recent builds of '{job}'.",
         empty=f"🔍 '{job}' has no builds matching that description.",
     )
 
 
-@builds.command("show")
+@build.command("show")
 @click.argument("job")
-@click.argument("build", default="lastBuild")
-@connection_options
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
 @pass_ctx
-def builds_show(
+def build_show(
     ctx: _Ctx,
     job: str,
-    build: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
+    build_id: str,
 ) -> None:
     """Show a single build (by number, or a permalink like lastBuild)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
-        info = client.build_info(job, build)
+        info = client.build_info(job, build_id)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
@@ -1114,9 +1273,9 @@ def builds_show(
     _emit(
         ctx,
         records,
-        _build_columns(ctx),
-        header=f"🛠️ Build {build} of '{job}'.",
-        empty=f"🤷 I could find no build '{build}' for '{job}'.",
+        _build_columns(ctx, include_details=True),
+        header=f"🛠️ Build {build_id} of '{job}'.",
+        empty=f"🤷 I could find no build '{build_id}' for '{job}'.",
     )
 
 
@@ -1145,19 +1304,15 @@ def _param_records(job_json: dict) -> list[dict]:
     return records
 
 
-@main.command()
-@click.argument("job")
-@connection_options
+@job.command("params")
+@click.argument("job", metavar="JOB")
 @pass_ctx
-def params(
+def job_params(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
 ) -> None:
     """Show a job's build parameters (name, type, default, choices)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         job_json = client.job(job)
     except JenkinsError as exc:
@@ -1185,7 +1340,7 @@ def params(
     )
 
 
-# ── rebuild ──────────────────────────────────────────────────────────────────
+# ── build rebuild ────────────────────────────────────────────────────────────
 
 
 def _params_from_build(info: dict) -> dict[str, str]:
@@ -1201,9 +1356,8 @@ def _params_from_build(info: dict) -> dict[str, str]:
     return {}
 
 
-@main.command()
+@build.command("rebuild")
 @click.argument("job")
-@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1219,12 +1373,9 @@ def _params_from_build(info: dict) -> dict[str, str]:
     help="Override a parameter for the rebuild. Repeatable.",
 )
 @pass_ctx
-def rebuild(
+def build_rebuild(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     build_id: str,
     overrides: tuple[str, ...],
 ) -> None:
@@ -1244,7 +1395,7 @@ def rebuild(
             click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         info = client.build_info(job, build_id)
         if info is None:
@@ -1268,33 +1419,11 @@ def rebuild(
             click.echo(f"   with: {summary}", color=ctx.colour)
 
 
-# ── log ─────────────────────────────────────────────────────────────────────
+# ── build log ────────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
-@connection_options
-@click.option(
-    "--build",
-    "build_id",
-    default="lastBuild",
-    metavar="N",
-    help="Build number (default: lastBuild).",
-)
-@pass_ctx
-def log(
-    ctx: _Ctx,
-    job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
-    build_id: str,
-) -> None:
-    """Show the console log for a build.
-
-    JOB is the job name. Use --build to specify a build number.
-    """
-    client = _make_client(ctx, url, user, token)
+def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
+    client = _make_client(ctx)
     try:
         text = client.log(job, build=build_id)
     except JenkinsError as exc:
@@ -1304,15 +1433,122 @@ def log(
     click.echo(text, nl=False)
 
 
+@build.command("log")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@pass_ctx
+def build_log(
+    ctx: _Ctx,
+    job: str,
+    build_id: str,
+) -> None:
+    """Show the console log for a build.
+
+    JOB is the job name; BUILD is a build number or permalink
+    (default: lastBuild).
+    """
+    _log_impl(ctx, job, build_id)
+
+
+# ── build test-report ────────────────────────────────────────────────────────
+
+
+@build.command("test-report")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@click.option(
+    "--failed-only",
+    "failed_only",
+    is_flag=True,
+    default=False,
+    help="Show only FAILED/REGRESSION cases; default shows all cases.",
+)
+@pass_ctx
+def build_test_report(
+    ctx: _Ctx,
+    job: str,
+    build_id: str,
+    failed_only: bool,
+) -> None:
+    """Show the JUnit test report for a build.
+
+    JOB is the job name; BUILD is a build number or permalink
+    (default: lastBuild).
+    """
+    client = _make_client(ctx)
+    try:
+        data = client.test_report(job, build_id)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
+        sys.exit(1)
+
+    if data is None:
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    "📋 No test report was filed for that build. "
+                    "Perhaps the test stage was skipped entirely.",
+                    fg="yellow",
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        return
+
+    if not ctx.quiet:
+        pass_count = data.get("passCount", 0)
+        fail_count = data.get("failCount", 0)
+        skip_count = data.get("skipCount", 0)
+        duration = data.get("duration", 0.0)
+        click.echo(
+            click.style(
+                f"🧪 Tests: {pass_count} passed, {fail_count} failed, "
+                f"{skip_count} skipped — {duration:.2f}s",
+                fg="cyan",
+            ),
+            err=True,
+            color=ctx.colour,
+        )
+
+    records = _test_case_records(data, failed_only)
+
+    def status_table(r: dict, _i: int) -> str:
+        return _format_test_status(r["status"], ctx.colour)
+
+    def duration_table(r: dict, _i: int) -> str:
+        return f"{r['duration']:.3f}s" if r["duration"] is not None else "—"
+
+    def duration_plain(r: dict) -> str:
+        return f"{r['duration']:.3f}s" if r["duration"] is not None else ""
+
+    columns = [
+        Column("class_name", "Class"),
+        Column("name", "Test"),
+        Column("status", "Status", table=status_table),
+        Column(
+            "duration",
+            "Duration",
+            table=duration_table,
+            plain=duration_plain,
+        ),
+        Column("error", "Error"),
+    ]
+    empty = (
+        "✅ No failed tests to report. The suite passed without incident."
+        if failed_only
+        else "✅ The test suite has no cases on record for this build."
+    )
+    _emit(ctx, records, columns, header="📋 Test cases:", empty=empty)
+
+
 # ── queue ───────────────────────────────────────────────────────────────────
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def queue(ctx: _Ctx) -> None:
     """Show the Jenkins build queue."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         items = client.queue()
     except JenkinsError as exc:
@@ -1371,34 +1607,11 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
     )
 
 
-# ── cancel ──────────────────────────────────────────────────────────────────
+# ── build cancel ─────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
-@connection_options
-@click.option(
-    "--build",
-    "build_id",
-    required=True,
-    type=int,
-    metavar="N",
-    help="Build number to cancel.",
-)
-@pass_ctx
-def cancel(
-    ctx: _Ctx,
-    job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
-    build_id: int,
-) -> None:
-    """Cancel a running Jenkins build.
-
-    JOB is the job name. --build N is required.
-    """
-    client = _make_client(ctx, url, user, token)
+def _cancel_impl(ctx: _Ctx, job: str, build_id: int) -> None:
+    client = _make_client(ctx)
     try:
         client.cancel(job, build_id)
     except JenkinsError as exc:
@@ -1414,17 +1627,48 @@ def cancel(
         )
 
 
-# ── nodes ───────────────────────────────────────────────────────────────────
-
-
-@main.command()
-@connection_options
+@build.command("cancel")
+@click.argument("job")
+@click.argument("build_id", metavar="BUILD", type=int)
 @pass_ctx
-def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def build_cancel(
+    ctx: _Ctx,
+    job: str,
+    build_id: int,
+) -> None:
+    """Cancel a running Jenkins build.
+
+    JOB is the job name; BUILD is the build number to cancel.
+    """
+    _cancel_impl(ctx, job, build_id)
+
+
+# ── node list ────────────────────────────────────────────────────────────────
+
+
+def _disk_table_cell(num: int | None, colour: bool) -> str:
+    """Free-disk cell with threshold colouring (low = red)."""
+    text = _format_bytes(num)
+    if not colour or num is None:
+        return text
+    gb = num / (1024**3)
+    fg = "red" if gb < 5 else "yellow" if gb < 20 else "green"
+    return click.style(text, fg=fg)
+
+
+@node_group.command("list")
+@click.option(
+    "--stats",
+    is_flag=True,
+    default=False,
+    help="Show node health metrics (disk, temp, swap, response time, arch).",
+)
+@pass_ctx
+def node_list(ctx: _Ctx, stats: bool) -> None:
     """List Jenkins build nodes (agents)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
-        node_list = client.nodes()
+        node_list = client.nodes(depth=1 if stats else 0)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
@@ -1437,15 +1681,16 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         raw_labels = [
             lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
         ]
-        records.append(
-            {
-                "name": display_name,
-                "status": "offline" if n.get("offline", False) else "online",
-                "executors": n.get("numExecutors", "?"),
-                "labels": [lbl for lbl in raw_labels if lbl != display_name],
-                "url": f"{client._base}/computer/{url_name}/",
-            }
-        )
+        record = {
+            "name": display_name,
+            "status": "offline" if n.get("offline", False) else "online",
+            "executors": n.get("numExecutors", "?"),
+            "labels": [lbl for lbl in raw_labels if lbl != display_name],
+            "url": f"{client._base}/computer/{url_name}/",
+        }
+        if stats:
+            record.update(_node_stat_fields(n.get("monitorData") or {}))
+        records.append(record)
 
     def name_table(r: dict, i: int) -> str:
         s = _hyperlink(r["name"], r["url"], ctx.colour)
@@ -1477,17 +1722,60 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
             parts.append(linked)
         return ", ".join(parts)
 
-    columns = [
-        Column("name", "Node", table=name_table, plain=lambda r: r["name"]),
-        Column("status", "Status", table=status_table),
-        Column("executors", "Executors", table=executors_table),
-        Column(
-            "labels",
-            "Labels",
-            table=labels_table,
-            plain=lambda r: ", ".join(r["labels"]),
-        ),
-    ]
+    name_col = Column("name", "Node", table=name_table, plain=lambda r: r["name"])
+    status_col = Column("status", "Status", table=status_table)
+
+    if stats:
+        columns = [
+            name_col,
+            status_col,
+            Column(
+                "disk",
+                "Disk",
+                table=lambda r, _i: _disk_table_cell(r["disk"], ctx.colour),
+                plain=lambda r: _format_bytes(r["disk"]),
+            ),
+            Column(
+                "temp",
+                "Temp",
+                table=lambda r, _i: _format_bytes(r["temp"]),
+                plain=lambda r: _format_bytes(r["temp"]),
+            ),
+            Column(
+                "swap",
+                "Swap",
+                table=lambda r, _i: _format_bytes(r["swap"]),
+                plain=lambda r: _format_bytes(r["swap"]),
+            ),
+            Column(
+                "response_ms",
+                "Response",
+                table=lambda r, _i: (
+                    "—" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+                plain=lambda r: (
+                    "" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+            ),
+            Column(
+                "architecture",
+                "Arch",
+                plain=lambda r: r["architecture"] or "",
+                table=lambda r, _i: r["architecture"] or "—",
+            ),
+        ]
+    else:
+        columns = [
+            name_col,
+            status_col,
+            Column("executors", "Executors", table=executors_table),
+            Column(
+                "labels",
+                "Labels",
+                table=labels_table,
+                plain=lambda r: ", ".join(r["labels"]),
+            ),
+        ]
     _emit(
         ctx,
         records,
@@ -1504,11 +1792,10 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def whoami(ctx: _Ctx) -> None:
     """Show the currently authenticated Jenkins user."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         data = client.whoami()
     except JenkinsError as exc:
@@ -1635,3 +1922,118 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
+
+
+# ── deprecated aliases ────────────────────────────────────────────────────────
+# The pre-noun-group flat commands keep working for one release, hidden from
+# --help, each printing a gentle notice pointing at the new spelling.
+
+
+def _deprecation_notice(old: str, new: str) -> None:
+    ctx = click.get_current_context(silent=True)
+    obj = ctx.find_object(_Ctx) if ctx else None
+    colour = obj.colour if obj else True
+    quiet = obj.quiet if obj else False
+    if quiet:
+        # Still actionable for scripts, but without the butler flourish.
+        click.echo(f"Warning: 'jeeves {old}' has moved to 'jeeves {new}'.", err=True)
+        return
+    click.echo(
+        click.style(
+            f"🎩 A gentle word: 'jeeves {old}' has moved to 'jeeves {new}'. "
+            "The old form retires in a future release.",
+            fg="yellow",
+        ),
+        err=True,
+        color=colour,
+    )
+
+
+def _deprecated_alias(
+    old: str, new: str, target: click.Command, *, name: str
+) -> click.Command:
+    """A hidden Command that prints a deprecation notice then runs ``target``.
+
+    The alias shares ``target``'s Param objects — safe, since parse state lives
+    on the Context, not the Param; do not mutate params in place on either.
+    """
+
+    def _callback(*args, **kwargs):
+        _deprecation_notice(old, new)
+        return target.callback(*args, **kwargs)
+
+    functools.update_wrapper(_callback, target.callback)
+    return click.Command(
+        name=name,
+        params=list(target.params),
+        callback=_callback,
+        help=target.help,
+        hidden=True,
+    )
+
+
+main.add_command(_deprecated_alias("jobs", "job list", job_list, name="jobs"))
+main.add_command(
+    _deprecated_alias("params JOB", "job params JOB", job_params, name="params")
+)
+main.add_command(
+    _deprecated_alias("rebuild JOB", "build rebuild JOB", build_rebuild, name="rebuild")
+)
+main.add_command(_deprecated_alias("nodes", "node list", node_list, name="nodes"))
+
+# Reachable only via _BuildGroup's fallback (never registered on main): keeps
+# the legacy `jeeves build JOB [--param K=V]` trigger form working.
+_LEGACY_BUILD_VERB = _deprecated_alias(
+    "build JOB", "job trigger JOB", job_trigger, name="build"
+)
+
+_builds_alias = click.Group("builds", hidden=True, help="Deprecated: use 'build'.")
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds summary JOB", "build summary JOB", build_summary, name="summary"
+    )
+)
+_builds_alias.add_command(
+    _deprecated_alias("builds list JOB", "build list JOB", build_list, name="list")
+)
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds show JOB [BUILD]", "build show JOB [BUILD]", build_show, name="show"
+    )
+)
+main.add_command(_builds_alias)
+
+
+# `log` and `cancel` changed shape (--build option → positional BUILD), so
+# their aliases are hand-written with the old signatures frozen.
+@main.command("log", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    default="lastBuild",
+    metavar="N",
+    help="Build number (default: lastBuild).",
+)
+@pass_ctx
+def legacy_log(ctx: _Ctx, job: str, build_id: str) -> None:
+    """Deprecated: use 'jeeves build log'."""
+    _deprecation_notice("log JOB --build N", "build log JOB [BUILD]")
+    _log_impl(ctx, job, build_id)
+
+
+@main.command("cancel", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    required=True,
+    type=int,
+    metavar="N",
+    help="Build number to cancel.",
+)
+@pass_ctx
+def legacy_cancel(ctx: _Ctx, job: str, build_id: int) -> None:
+    """Deprecated: use 'jeeves build cancel'."""
+    _deprecation_notice("cancel JOB --build N", "build cancel JOB BUILD")
+    _cancel_impl(ctx, job, build_id)

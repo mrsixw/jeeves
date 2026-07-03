@@ -115,10 +115,17 @@ class JenkinsClient:
         """Fetch a job's recent builds (newest first), capped at ``limit``.
 
         Uses the Jenkins ``tree`` range selector so only ``limit`` builds are
-        pulled server-side rather than the whole history.
+        pulled server-side rather than the whole history. Also pulls each
+        build's parameters and causes so callers can inspect or filter on
+        them without a second round-trip per build.
         """
         path = _normalize_jenkins_path(job)
-        tree = f"builds[number,result,timestamp,duration,url,building]{{0,{limit}}}"
+        tree = (
+            "builds[number,result,timestamp,duration,url,building,"
+            "actions[parameters[name,value],"
+            "causes[shortDescription,userId,upstreamProject,upstreamBuild]]]"
+            f"{{0,{limit}}}"
+        )
         return self._get(path, params={"tree": tree}).get("builds", [])
 
     def build_info(self, job: str, build: int | str = "lastBuild") -> dict | None:
@@ -128,6 +135,20 @@ class JenkinsClient:
         a job that has never failed has no ``lastFailedBuild``.
         """
         path = f"{_normalize_jenkins_path(job)}/{build}"
+        try:
+            return self._get(path)
+        except JenkinsError as exc:
+            if "Jenkins returned 404" in str(exc):
+                return None
+            raise
+
+    def test_report(self, job: str, build: int | str = "lastBuild") -> dict | None:
+        """Fetch the JUnit test report for a build.
+
+        Returns ``None`` when Jenkins has no test report (404), e.g. the test
+        stage was skipped or the job never published results.
+        """
+        path = f"{_normalize_jenkins_path(job)}/{build}/testReport"
         try:
             return self._get(path)
         except JenkinsError as exc:
@@ -152,8 +173,10 @@ class JenkinsClient:
         job_path = _normalize_jenkins_path(job)
         self._post(f"{job_path}/{build}/stop")
 
-    def nodes(self) -> list[dict]:
-        return self._get("computer").get("computer", [])
+    def nodes(self, depth: int = 0) -> list[dict]:
+        """List nodes. ``depth=1`` populates per-node ``monitorData`` (stats)."""
+        params = {"depth": depth} if depth else None
+        return self._get("computer", params=params).get("computer", [])
 
     def whoami(self) -> dict:
         return self._get("me")
