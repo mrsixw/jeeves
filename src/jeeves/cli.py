@@ -6,6 +6,7 @@ utmost discretion and efficiency.
 
 from __future__ import annotations
 
+import functools
 import random
 import sys
 import time
@@ -394,7 +395,41 @@ def status(ctx: _Ctx) -> None:
     click.echo(tabulate(rows, tablefmt="simple"), color=ctx.colour)
 
 
-# ── jobs ────────────────────────────────────────────────────────────────────
+# ── noun groups (job / build / node) ─────────────────────────────────────────
+
+
+class _BuildGroup(click.Group):
+    """`build` is a noun group, but the legacy verb `jeeves build JOB
+    [--param K=V]` still works: an unknown first token falls back to the
+    hidden deprecated trigger command; real subcommands take priority."""
+
+    def resolve_command(self, ctx, args):
+        if (
+            args
+            and not args[0].startswith("-")
+            and self.get_command(ctx, args[0]) is None
+        ):
+            # Return full `args` (not args[1:]) so the token becomes JOB.
+            return _LEGACY_BUILD_VERB.name, _LEGACY_BUILD_VERB, args
+        return super().resolve_command(ctx, args)
+
+
+@main.group()
+def job() -> None:
+    """Work with Jenkins jobs: list, parameters, trigger."""
+
+
+@main.group(cls=_BuildGroup)
+def build() -> None:
+    """Inspect and manage a job's builds."""
+
+
+@main.group("node")
+def node_group() -> None:
+    """Work with Jenkins build nodes (agents)."""
+
+
+# ── job list ─────────────────────────────────────────────────────────────────
 
 # (colour, label, emoji)
 _JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
@@ -808,7 +843,7 @@ def _emit(
     click.echo(out, color=ctx.colour)
 
 
-@main.command()
+@job.command("list")
 @click.option(
     "--folder", default=None, metavar="NAME", help="Limit to a Jenkins folder."
 )
@@ -835,7 +870,7 @@ def _emit(
     help="Print the job-type icon reference and exit.",
 )
 @pass_ctx
-def jobs(
+def job_list(
     ctx: _Ctx,
     folder: str | None,
     no_weather: bool,
@@ -874,11 +909,11 @@ def jobs(
     )
 
 
-# ── build ───────────────────────────────────────────────────────────────────
+# ── job trigger ──────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
+@job.command("trigger")
+@click.argument("job_name", metavar="JOB")
 @click.option(
     "--param",
     "params",
@@ -887,9 +922,9 @@ def jobs(
     help="Build parameter in KEY=VALUE format. Repeatable.",
 )
 @pass_ctx
-def build(
+def job_trigger(
     ctx: _Ctx,
-    job: str,
+    job_name: str,
     params: tuple[str, ...],
 ) -> None:
     """Trigger a Jenkins build.
@@ -908,13 +943,15 @@ def build(
 
     client = _make_client(ctx)
     try:
-        client.build(job, params=param_dict or None)
+        client.build(job_name, params=param_dict or None)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     click.echo(
-        click.style(f"🚀 I shall dispatch '{job}' at once. Very good.", fg="green"),
+        click.style(
+            f"🚀 I shall dispatch '{job_name}' at once. Very good.", fg="green"
+        ),
         color=ctx.colour,
     )
 
@@ -1046,15 +1083,10 @@ def _build_columns(
     return cols
 
 
-@main.group(invoke_without_command=False)
-def builds() -> None:
-    """Inspect a job's builds: summary, full history, or a single build."""
-
-
-@builds.command("summary")
+@build.command("summary")
 @click.argument("job")
 @pass_ctx
-def builds_summary(
+def build_summary(
     ctx: _Ctx,
     job: str,
 ) -> None:
@@ -1081,7 +1113,7 @@ def builds_summary(
     )
 
 
-@builds.command("list")
+@build.command("list")
 @click.argument("job")
 @click.option(
     "--limit", default=20, metavar="N", type=int, help="Maximum builds to show."
@@ -1101,7 +1133,7 @@ def builds_summary(
     help="Only builds with this parameter value. Repeatable (all must match).",
 )
 @pass_ctx
-def builds_list(
+def build_list(
     ctx: _Ctx,
     job: str,
     limit: int,
@@ -1146,19 +1178,19 @@ def builds_list(
     )
 
 
-@builds.command("show")
+@build.command("show")
 @click.argument("job")
-@click.argument("build", default="lastBuild")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
 @pass_ctx
-def builds_show(
+def build_show(
     ctx: _Ctx,
     job: str,
-    build: str,
+    build_id: str,
 ) -> None:
     """Show a single build (by number, or a permalink like lastBuild)."""
     client = _make_client(ctx)
     try:
-        info = client.build_info(job, build)
+        info = client.build_info(job, build_id)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
@@ -1168,8 +1200,8 @@ def builds_show(
         ctx,
         records,
         _build_columns(ctx, include_details=True),
-        header=f"🛠️ Build {build} of '{job}'.",
-        empty=f"🤷 I could find no build '{build}' for '{job}'.",
+        header=f"🛠️ Build {build_id} of '{job}'.",
+        empty=f"🤷 I could find no build '{build_id}' for '{job}'.",
     )
 
 
@@ -1198,10 +1230,10 @@ def _param_records(job_json: dict) -> list[dict]:
     return records
 
 
-@main.command()
-@click.argument("job")
+@job.command("params")
+@click.argument("job", metavar="JOB")
 @pass_ctx
-def params(
+def job_params(
     ctx: _Ctx,
     job: str,
 ) -> None:
@@ -1234,7 +1266,7 @@ def params(
     )
 
 
-# ── rebuild ──────────────────────────────────────────────────────────────────
+# ── build rebuild ────────────────────────────────────────────────────────────
 
 
 def _params_from_build(info: dict) -> dict[str, str]:
@@ -1250,7 +1282,7 @@ def _params_from_build(info: dict) -> dict[str, str]:
     return {}
 
 
-@main.command()
+@build.command("rebuild")
 @click.argument("job")
 @click.option(
     "--build",
@@ -1267,7 +1299,7 @@ def _params_from_build(info: dict) -> dict[str, str]:
     help="Override a parameter for the rebuild. Repeatable.",
 )
 @pass_ctx
-def rebuild(
+def build_rebuild(
     ctx: _Ctx,
     job: str,
     build_id: str,
@@ -1306,28 +1338,10 @@ def rebuild(
         click.echo(f"   with: {summary}", color=ctx.colour)
 
 
-# ── log ─────────────────────────────────────────────────────────────────────
+# ── build log ────────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    default="lastBuild",
-    metavar="N",
-    help="Build number (default: lastBuild).",
-)
-@pass_ctx
-def log(
-    ctx: _Ctx,
-    job: str,
-    build_id: str,
-) -> None:
-    """Show the console log for a build.
-
-    JOB is the job name. Use --build to specify a build number.
-    """
+def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     client = _make_client(ctx)
     try:
         text = client.log(job, build=build_id)
@@ -1336,6 +1350,23 @@ def log(
         sys.exit(1)
 
     click.echo(text, nl=False)
+
+
+@build.command("log")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@pass_ctx
+def build_log(
+    ctx: _Ctx,
+    job: str,
+    build_id: str,
+) -> None:
+    """Show the console log for a build.
+
+    JOB is the job name; BUILD is a build number or permalink
+    (default: lastBuild).
+    """
+    _log_impl(ctx, job, build_id)
 
 
 # ── queue ───────────────────────────────────────────────────────────────────
@@ -1404,29 +1435,10 @@ def queue(ctx: _Ctx) -> None:
     )
 
 
-# ── cancel ──────────────────────────────────────────────────────────────────
+# ── build cancel ─────────────────────────────────────────────────────────────
 
 
-@main.command()
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    required=True,
-    type=int,
-    metavar="N",
-    help="Build number to cancel.",
-)
-@pass_ctx
-def cancel(
-    ctx: _Ctx,
-    job: str,
-    build_id: int,
-) -> None:
-    """Cancel a running Jenkins build.
-
-    JOB is the job name. --build N is required.
-    """
+def _cancel_impl(ctx: _Ctx, job: str, build_id: int) -> None:
     client = _make_client(ctx)
     try:
         client.cancel(job, build_id)
@@ -1440,7 +1452,23 @@ def cancel(
     )
 
 
-# ── nodes ───────────────────────────────────────────────────────────────────
+@build.command("cancel")
+@click.argument("job")
+@click.argument("build_id", metavar="BUILD", type=int)
+@pass_ctx
+def build_cancel(
+    ctx: _Ctx,
+    job: str,
+    build_id: int,
+) -> None:
+    """Cancel a running Jenkins build.
+
+    JOB is the job name; BUILD is the build number to cancel.
+    """
+    _cancel_impl(ctx, job, build_id)
+
+
+# ── node list ────────────────────────────────────────────────────────────────
 
 
 def _disk_table_cell(num: int | None, colour: bool) -> str:
@@ -1453,7 +1481,7 @@ def _disk_table_cell(num: int | None, colour: bool) -> str:
     return click.style(text, fg=fg)
 
 
-@main.command()
+@node_group.command("list")
 @click.option(
     "--stats",
     is_flag=True,
@@ -1461,7 +1489,7 @@ def _disk_table_cell(num: int | None, colour: bool) -> str:
     help="Show node health metrics (disk, temp, swap, response time, arch).",
 )
 @pass_ctx
-def nodes(ctx: _Ctx, stats: bool) -> None:
+def node_list(ctx: _Ctx, stats: bool) -> None:
     """List Jenkins build nodes (agents)."""
     client = _make_client(ctx)
     try:
@@ -1719,3 +1747,113 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
+
+
+# ── deprecated aliases ────────────────────────────────────────────────────────
+# The pre-noun-group flat commands keep working for one release, hidden from
+# --help, each printing a gentle notice pointing at the new spelling.
+
+
+def _deprecation_notice(old: str, new: str) -> None:
+    ctx = click.get_current_context(silent=True)
+    obj = ctx.find_object(_Ctx) if ctx else None
+    colour = obj.colour if obj else True
+    click.echo(
+        click.style(
+            f"🎩 A gentle word: 'jeeves {old}' has moved to 'jeeves {new}'. "
+            "The old form retires in a future release.",
+            fg="yellow",
+        ),
+        err=True,
+        color=colour,
+    )
+
+
+def _deprecated_alias(
+    old: str, new: str, target: click.Command, *, name: str
+) -> click.Command:
+    """A hidden Command that prints a deprecation notice then runs ``target``.
+
+    The alias shares ``target``'s Param objects — safe, since parse state lives
+    on the Context, not the Param; do not mutate params in place on either.
+    """
+
+    def _callback(*args, **kwargs):
+        _deprecation_notice(old, new)
+        return target.callback(*args, **kwargs)
+
+    functools.update_wrapper(_callback, target.callback)
+    return click.Command(
+        name=name,
+        params=list(target.params),
+        callback=_callback,
+        help=target.help,
+        hidden=True,
+    )
+
+
+main.add_command(_deprecated_alias("jobs", "job list", job_list, name="jobs"))
+main.add_command(
+    _deprecated_alias("params JOB", "job params JOB", job_params, name="params")
+)
+main.add_command(
+    _deprecated_alias("rebuild JOB", "build rebuild JOB", build_rebuild, name="rebuild")
+)
+main.add_command(_deprecated_alias("nodes", "node list", node_list, name="nodes"))
+
+# Reachable only via _BuildGroup's fallback (never registered on main): keeps
+# the legacy `jeeves build JOB [--param K=V]` trigger form working.
+_LEGACY_BUILD_VERB = _deprecated_alias(
+    "build JOB", "job trigger JOB", job_trigger, name="build"
+)
+
+_builds_alias = click.Group("builds", hidden=True, help="Deprecated: use 'build'.")
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds summary JOB", "build summary JOB", build_summary, name="summary"
+    )
+)
+_builds_alias.add_command(
+    _deprecated_alias("builds list JOB", "build list JOB", build_list, name="list")
+)
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds show JOB [BUILD]", "build show JOB [BUILD]", build_show, name="show"
+    )
+)
+main.add_command(_builds_alias)
+
+
+# `log` and `cancel` changed shape (--build option → positional BUILD), so
+# their aliases are hand-written with the old signatures frozen.
+@main.command("log", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    default="lastBuild",
+    metavar="N",
+    help="Build number (default: lastBuild).",
+)
+@pass_ctx
+def legacy_log(ctx: _Ctx, job: str, build_id: str) -> None:
+    """Deprecated: use 'jeeves build log'."""
+    _deprecation_notice("log JOB --build N", "build log JOB [BUILD]")
+    _log_impl(ctx, job, build_id)
+
+
+@main.command("cancel", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    required=True,
+    type=int,
+    metavar="N",
+    help="Build number to cancel.",
+)
+@pass_ctx
+def legacy_cancel(ctx: _Ctx, job: str, build_id: int) -> None:
+    """Deprecated: use 'jeeves build cancel'."""
+    _deprecation_notice("cancel JOB --build N", "build cancel JOB BUILD")
+    _cancel_impl(ctx, job, build_id)

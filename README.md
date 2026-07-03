@@ -9,20 +9,27 @@
 
 ## Commands
 
+Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at the top, then `job`, `build`, and `node` groups.
+
 | Command | Description |
 | ------- | ----------- |
 | `jeeves status` | Check Jenkins server health |
-| `jeeves jobs [--folder NAME]` | List all jobs and their status |
-| `jeeves build JOB [--param K=V]` | Trigger a build |
-| `jeeves builds summary JOB` | Show last / successful / failed builds |
-| `jeeves builds list JOB [--limit N] [--result X] [--param K=V]` | Show recent build history, optionally filtered by parameter |
-| `jeeves builds show JOB [N]` | Show a single build, including its parameters and causes |
-| `jeeves rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
-| `jeeves params JOB` | Show a job's build parameters |
-| `jeeves log JOB [--build N]` | Show build console output |
 | `jeeves queue` | Show the build queue |
-| `jeeves cancel JOB --build N` | Cancel a running build |
-| `jeeves nodes [--stats]` | List build nodes (agents); `--stats` adds health metrics |
+| `jeeves whoami` | Show the authenticated Jenkins user |
+| `jeeves job list [--folder NAME]` | List all jobs and their status |
+| `jeeves job params JOB` | Show a job's build parameters |
+| `jeeves job trigger JOB [--param K=V]` | Trigger a build |
+| `jeeves build summary JOB` | Show last / successful / failed builds |
+| `jeeves build list JOB [--limit N] [--result X] [--param K=V]` | Show recent build history, optionally filtered by parameter |
+| `jeeves build show JOB [BUILD]` | Show a single build, including its parameters and causes |
+| `jeeves build log JOB [BUILD]` | Show build console output |
+| `jeeves build cancel JOB BUILD` | Cancel a running build |
+| `jeeves build rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
+| `jeeves node list [--stats]` | List build nodes (agents); `--stats` adds health metrics |
+
+### Deprecated spellings
+
+The pre-0.18 flat commands (`jobs`, `build JOB`, `builds …`, `params`, `log`, `cancel`, `rebuild`, `nodes`) still work for one more release. They are hidden from `--help` and print a gentle notice pointing at the new spelling. One caveat: a job literally named after a `build` subcommand (`list`, `summary`, `show`, `log`, `cancel`, `rebuild`) cannot be triggered via the legacy `jeeves build NAME` form — use `jeeves job trigger NAME`.
 
 ## Installation
 
@@ -35,8 +42,8 @@ curl -sSL https://raw.githubusercontent.com/mrsixw/jeeves/main/install.sh | bash
 ```bash
 jeeves --init-config                       # write a starter config
 jeeves status                              # check the Jenkins server
-jeeves jobs                                # list jobs and their status
-jeeves --format json jobs | jq            # structured output for scripting
+jeeves job list                            # list jobs and their status
+jeeves --format json job list | jq        # structured output for scripting
 eval "$(jeeves --completion bash)"         # shell completions
 ```
 
