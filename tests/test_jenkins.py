@@ -168,6 +168,9 @@ def test_builds_returns_list_with_tree_range(client: JenkinsClient) -> None:
     tree = m.last_request.qs["tree"][0]
     assert "builds[" in tree
     assert "{0,10}" in tree
+    # parameters and causes are pulled alongside the summary fields
+    assert "actions[parameters[" in tree
+    assert "causes[" in tree
 
 
 def test_build_info_returns_data(client: JenkinsClient) -> None:

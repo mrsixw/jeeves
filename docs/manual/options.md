@@ -6,7 +6,7 @@
 command:
 
 ```bash
-jeeves --url https://ci.example.com --user me --token *** jobs
+jeeves --url https://ci.example.com --user me --token *** job list
 ```
 
 They override the config file, and each has an environment variable
@@ -56,14 +56,14 @@ Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
 
 ### `--format`
 
-Choose how table commands (`jobs`, `nodes`, `queue`) render their results.
+Choose how table commands (`job list`, `node list`, `queue`) render their results.
 Decorative butler headers always go to stderr, so structured output on stdout
 stays clean and pipe-friendly.
 
 | Format | Description |
 | ------ | ----------- |
 | `table` | Default. Coloured, emoji-rich table with clickable hyperlinks. |
-| `tree` | Hierarchical view (jobs only) — reconstructs the folder/job tree. |
+| `tree` | Hierarchical view (`job list` only) — reconstructs the folder/job tree. |
 | `json` | Pretty JSON array of records (stable keys, semantic values). |
 | `ndjson` | One JSON object per line — ideal for streaming and `jq`. |
 | `markdown` | GitHub-flavoured Markdown table for PRs, docs, and Slack. |
@@ -71,10 +71,10 @@ stays clean and pipe-friendly.
 | `template` | Custom one-line-per-row output (see `--template`). |
 
 ```bash
-jeeves --format json jobs | jq '.[] | select(.status == "failed")'
-jeeves --format tree jobs --expand
-jeeves --format csv nodes > agents.csv
-jeeves --format markdown jobs >> report.md
+jeeves --format json job list | jq '.[] | select(.status == "failed")'
+jeeves --format tree job list --expand
+jeeves --format csv node list > agents.csv
+jeeves --format markdown job list >> report.md
 ```
 
 Config key: `format = "table"`
@@ -82,8 +82,8 @@ Config key: `format = "table"`
 Structured formats (`json`, `ndjson`) emit semantic values, never the
 decorative emoji. The JSON keys per command:
 
-- **jobs**: `name`, `type`, `color`, `status`, `health`, `url`
-- **nodes**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
+- **job list**: `name`, `type`, `color`, `status`, `health`, `url`
+- **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
 - **queue**: `name`, `reason`, `stuck`, `url`
 
 ### `--template`
@@ -92,8 +92,8 @@ Row template used with `--format template`. Fields are the JSON keys above,
 referenced in `{braces}`.
 
 ```bash
-jeeves --format template --template "{name}: {status} ({health})" jobs
-jeeves --format template --template "{name} -> {url}" nodes
+jeeves --format template --template "{name}: {status} ({health})" job list
+jeeves --format template --template "{name} -> {url}" node list
 ```
 
 ## Config options

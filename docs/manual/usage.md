@@ -29,26 +29,37 @@ jeeves --seasonal-calendar jewish       # Hanukkah, Passover, etc.
 jeeves --no-seasonal-colours            # disable entirely
 ```
 
+## Working with jobs
+
+```bash
+jeeves job list                              # list jobs and their status
+jeeves job list --folder platform            # limit to a folder
+jeeves job params my-pipeline                # list the job's build parameters
+jeeves job trigger my-pipeline --param ENV=prod
+```
+
 ## Working with builds
 
 ```bash
-jeeves builds summary my-pipeline            # last / successful / failed builds
-jeeves builds list my-pipeline               # recent build history
-jeeves builds list my-pipeline --limit 50 --result FAILURE
-jeeves builds show my-pipeline 142           # a specific build
-jeeves --format json builds list my-pipeline # structured output for scripting
-jeeves params my-pipeline                    # list the job's build parameters
-jeeves build my-pipeline --param ENV=prod
-jeeves rebuild my-pipeline                   # re-run lastBuild with its parameters
-jeeves rebuild my-pipeline --param ENV=staging   # ...overriding one of them
+jeeves build summary my-pipeline             # last / successful / failed builds
+jeeves build list my-pipeline                # recent build history
+jeeves build list my-pipeline --limit 50 --result FAILURE
+jeeves build show my-pipeline 142            # a specific build
+jeeves build log my-pipeline 142             # console output (default: lastBuild)
+jeeves build test-report my-pipeline 142     # JUnit test report
+jeeves build test-report my-pipeline --failed-only   # only FAILED/REGRESSION cases
+jeeves build cancel my-pipeline 142          # cancel a running build
+jeeves --format json build list my-pipeline  # structured output for scripting
+jeeves build rebuild my-pipeline             # re-run lastBuild with its parameters
+jeeves build rebuild my-pipeline --param ENV=staging   # ...overriding one of them
 ```
 
 ## Nodes
 
 ```bash
-jeeves nodes                 # online/offline, executors, labels
-jeeves nodes --stats         # + disk, temp, swap, response time, architecture
-jeeves --format json nodes --stats   # raw byte/ms values for scripting
+jeeves node list                 # online/offline, executors, labels
+jeeves node list --stats         # + disk, temp, swap, response time, architecture
+jeeves --format json node list --stats   # raw byte/ms values for scripting
 ```
 
 ## Config file
