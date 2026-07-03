@@ -576,6 +576,41 @@ def _format_duration(ms: int | None) -> str:
     return f"{hours}h{mins:02d}m"
 
 
+def _format_bytes(num: int | None) -> str:
+    """Human byte size (e.g. '12.3 GB'), or '—' when unknown."""
+    if num is None:
+        return "—"
+    size = float(num)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _node_monitor(monitor_data: dict, name: str) -> dict | str | None:
+    """Read one monitor's value from a node's monitorData (None if absent/null)."""
+    return monitor_data.get(f"hudson.node_monitors.{name}")
+
+
+def _node_stat_fields(monitor_data: dict) -> dict:
+    """Parse a node's monitorData into flat semantic stat fields."""
+
+    def _size(name: str, key: str) -> int | None:
+        value = _node_monitor(monitor_data, name)
+        return value.get(key) if isinstance(value, dict) else None
+
+    arch = _node_monitor(monitor_data, "ArchitectureMonitor")
+    return {
+        "disk": _size("DiskSpaceMonitor", "size"),
+        "temp": _size("TemporarySpaceMonitor", "size"),
+        "swap": _size("SwapSpaceMonitor", "availableSwapSpace"),
+        "response_ms": _size("ResponseTimeMonitor", "average"),
+        "clock_ms": _size("ClockMonitor", "diff"),
+        "architecture": arch if isinstance(arch, str) else None,
+    }
+
+
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
     """Parse repeated KEY=VALUE strings into a dict (raises ValueError on a bad one)."""
     parsed: dict[str, str] = {}
@@ -1345,13 +1380,29 @@ def cancel(
 # ── nodes ───────────────────────────────────────────────────────────────────
 
 
+def _disk_table_cell(num: int | None, colour: bool) -> str:
+    """Free-disk cell with threshold colouring (low = red)."""
+    text = _format_bytes(num)
+    if not colour or num is None:
+        return text
+    gb = num / (1024**3)
+    fg = "red" if gb < 5 else "yellow" if gb < 20 else "green"
+    return click.style(text, fg=fg)
+
+
 @main.command()
+@click.option(
+    "--stats",
+    is_flag=True,
+    default=False,
+    help="Show node health metrics (disk, temp, swap, response time, arch).",
+)
 @pass_ctx
-def nodes(ctx: _Ctx) -> None:
+def nodes(ctx: _Ctx, stats: bool) -> None:
     """List Jenkins build nodes (agents)."""
     client = _make_client(ctx)
     try:
-        node_list = client.nodes()
+        node_list = client.nodes(depth=1 if stats else 0)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
@@ -1364,15 +1415,16 @@ def nodes(ctx: _Ctx) -> None:
         raw_labels = [
             lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
         ]
-        records.append(
-            {
-                "name": display_name,
-                "status": "offline" if n.get("offline", False) else "online",
-                "executors": n.get("numExecutors", "?"),
-                "labels": [lbl for lbl in raw_labels if lbl != display_name],
-                "url": f"{client._base}/computer/{url_name}/",
-            }
-        )
+        record = {
+            "name": display_name,
+            "status": "offline" if n.get("offline", False) else "online",
+            "executors": n.get("numExecutors", "?"),
+            "labels": [lbl for lbl in raw_labels if lbl != display_name],
+            "url": f"{client._base}/computer/{url_name}/",
+        }
+        if stats:
+            record.update(_node_stat_fields(n.get("monitorData") or {}))
+        records.append(record)
 
     def name_table(r: dict, i: int) -> str:
         s = _hyperlink(r["name"], r["url"], ctx.colour)
@@ -1404,17 +1456,60 @@ def nodes(ctx: _Ctx) -> None:
             parts.append(linked)
         return ", ".join(parts)
 
-    columns = [
-        Column("name", "Node", table=name_table, plain=lambda r: r["name"]),
-        Column("status", "Status", table=status_table),
-        Column("executors", "Executors", table=executors_table),
-        Column(
-            "labels",
-            "Labels",
-            table=labels_table,
-            plain=lambda r: ", ".join(r["labels"]),
-        ),
-    ]
+    name_col = Column("name", "Node", table=name_table, plain=lambda r: r["name"])
+    status_col = Column("status", "Status", table=status_table)
+
+    if stats:
+        columns = [
+            name_col,
+            status_col,
+            Column(
+                "disk",
+                "Disk",
+                table=lambda r, _i: _disk_table_cell(r["disk"], ctx.colour),
+                plain=lambda r: _format_bytes(r["disk"]),
+            ),
+            Column(
+                "temp",
+                "Temp",
+                table=lambda r, _i: _format_bytes(r["temp"]),
+                plain=lambda r: _format_bytes(r["temp"]),
+            ),
+            Column(
+                "swap",
+                "Swap",
+                table=lambda r, _i: _format_bytes(r["swap"]),
+                plain=lambda r: _format_bytes(r["swap"]),
+            ),
+            Column(
+                "response_ms",
+                "Response",
+                table=lambda r, _i: (
+                    "—" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+                plain=lambda r: (
+                    "" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+            ),
+            Column(
+                "architecture",
+                "Arch",
+                plain=lambda r: r["architecture"] or "",
+                table=lambda r, _i: r["architecture"] or "—",
+            ),
+        ]
+    else:
+        columns = [
+            name_col,
+            status_col,
+            Column("executors", "Executors", table=executors_table),
+            Column(
+                "labels",
+                "Labels",
+                table=labels_table,
+                plain=lambda r: ", ".join(r["labels"]),
+            ),
+        ]
     _emit(
         ctx,
         records,

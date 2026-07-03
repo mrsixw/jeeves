@@ -83,7 +83,7 @@ Structured formats (`json`, `ndjson`) emit semantic values, never the
 decorative emoji. The JSON keys per command:
 
 - **jobs**: `name`, `type`, `color`, `status`, `health`, `url`
-- **nodes**: `name`, `status`, `executors`, `labels`, `url`
+- **nodes**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
 - **queue**: `name`, `reason`, `stuck`, `url`
 
 ### `--template`
