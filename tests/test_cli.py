@@ -991,6 +991,138 @@ def test_builds_show_missing(monkeypatch):
     assert "could find no build" in result.stderr
 
 
+def test_builds_show_exposes_params_and_causes_table(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "7": {
+                "number": 7,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [
+                            {"name": "CHANGE_ID", "value": "12345"},
+                            {"name": "WAVE", "value": "2"},
+                        ],
+                    },
+                    {
+                        "_class": "hudson.model.CauseAction",
+                        "causes": [
+                            {
+                                "shortDescription": "Started by user bob",
+                                "userId": "bob",
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "builds", "show", "deploy", "7"
+    )
+    assert result.exit_code == 0
+    assert "CHANGE_ID=12345" in result.stdout
+    assert "WAVE=2" in result.stdout
+    assert "Started by user bob" in result.stdout
+
+
+def test_builds_show_exposes_params_and_causes_json(monkeypatch):
+    _build_info_mock(
+        monkeypatch,
+        {
+            "7": {
+                "number": 7,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "12345"}],
+                    },
+                    {
+                        "_class": "hudson.model.CauseAction",
+                        "causes": [
+                            {
+                                "shortDescription": "Started by project foo #3",
+                                "upstreamProject": "foo",
+                                "upstreamBuild": 3,
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+    result = _invoke(
+        "--no-update-check", "--format", "json", "builds", "show", "deploy", "7"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["params"] == {"CHANGE_ID": "12345"}
+    assert data[0]["causes"][0]["upstreamProject"] == "foo"
+    assert data[0]["causes"][0]["upstreamBuild"] == 3
+
+
+def test_builds_list_param_filter(monkeypatch):
+    _builds_list_mock(
+        monkeypatch,
+        [
+            {
+                "number": 142,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "abc"}],
+                    }
+                ],
+            },
+            {
+                "number": 141,
+                "result": "SUCCESS",
+                "building": False,
+                "actions": [
+                    {
+                        "_class": "hudson.model.ParametersAction",
+                        "parameters": [{"name": "CHANGE_ID", "value": "xyz"}],
+                    }
+                ],
+            },
+        ],
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "builds",
+        "list",
+        "deploy",
+        "--param",
+        "CHANGE_ID=abc",
+    )
+    assert result.exit_code == 0
+    assert "#142" in result.stdout
+    assert "#141" not in result.stdout
+
+
+def test_builds_list_param_filter_bad_format(monkeypatch):
+    _builds_list_mock(monkeypatch, [])
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "builds",
+        "list",
+        "deploy",
+        "--param",
+        "not-a-kv",
+    )
+    assert result.exit_code == 1
+    assert "KEY=VALUE" in result.stderr
+
+
 # ── params ────────────────────────────────────────────────────────────────────
 
 
