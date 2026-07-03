@@ -30,6 +30,33 @@
 curl -sSL https://raw.githubusercontent.com/mrsixw/jeeves/main/install.sh | bash
 ```
 
+Or build and install from source:
+
+```bash
+git clone https://github.com/mrsixw/jeeves.git
+cd jeeves
+make build
+sudo make install
+```
+
+By default, this installs the executable to `/usr/local/bin`. You can customize the installation prefix using the `PREFIX` variable:
+
+```bash
+make install PREFIX=$HOME/.local
+```
+
+To uninstall:
+
+```bash
+sudo make uninstall
+```
+
+If installed with a custom `PREFIX`:
+
+```bash
+make uninstall PREFIX=$HOME/.local
+```
+
 ## Quick start
 
 ```bash
