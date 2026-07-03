@@ -1830,160 +1830,26 @@ def test_test_report_duration_formatted(monkeypatch):
     assert "0.123s" in result.stdout
 
 
-# ── deprecated aliases ────────────────────────────────────────────────────────
-
-_NOTICE = "has moved to"
+# ── removed flat-command spellings ───────────────────────────────────────────
 
 
-def test_alias_jobs_works_and_warns(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "jobs",
-        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
-    )
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
-    assert result.exit_code == 0
-    assert "deploy-prod" in result.stdout
-    assert _NOTICE in result.stderr
-    assert "🎩" in result.stderr
-    assert _NOTICE not in result.stdout
+def test_old_flat_spellings_are_gone():
+    for old in ("jobs", "builds", "params", "rebuild", "log", "cancel", "nodes"):
+        result = _invoke("--no-colour", "--no-update-check", old)
+        assert result.exit_code == 2, old
+        assert "No such command" in result.stderr, old
 
 
-def test_alias_params_works_and_warns(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient, "job", lambda self, job: {"property": []}
-    )
-    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
-    assert result.exit_code == 0
-    assert "'jeeves job params JOB'" in result.stderr
-
-
-def test_alias_builds_group_works_and_warns(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "builds",
-        lambda self, job, limit=20: [
-            {"number": 3, "result": "SUCCESS", "building": False}
-        ],
-    )
-    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
-    assert result.exit_code == 0
-    assert "#3" in result.stdout
-    assert "'jeeves build list JOB'" in result.stderr
-
-
-def test_alias_rebuild_works_and_warns(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "build_info",
-        lambda self, job, build="lastBuild": {"actions": []},
-    )
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
-    )
-    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
-    assert result.exit_code == 0
-    assert "'jeeves build rebuild JOB'" in result.stderr
-
-
-def test_alias_log_keeps_old_option_signature(monkeypatch):
-    captured = {}
-
-    def _log(self, job, build="lastBuild"):
-        captured["build"] = build
-        return "the log"
-
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "log", _log)
-    result = _invoke(
-        "--no-colour", "--no-update-check", "log", "deploy", "--build", "7"
-    )
-    assert result.exit_code == 0
-    assert "the log" in result.stdout
-    assert captured["build"] == "7"
-    assert "'jeeves build log JOB [BUILD]'" in result.stderr
-
-
-def test_alias_cancel_keeps_old_option_signature(monkeypatch):
-    captured = {}
-
-    def _cancel(self, job, build):
-        captured["build"] = build
-
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "cancel", _cancel)
-    result = _invoke(
-        "--no-colour", "--no-update-check", "cancel", "deploy", "--build", "5"
-    )
-    assert result.exit_code == 0
-    assert captured["build"] == 5
-    assert "'jeeves build cancel JOB BUILD'" in result.stderr
-
-
-def test_alias_nodes_works_and_warns(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "nodes",
-        lambda self, depth=0: [{"displayName": "agent-1", "offline": False}],
-    )
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
-    assert result.exit_code == 0
-    assert "agent-1" in result.stdout
-    assert "'jeeves node list'" in result.stderr
-
-
-def test_legacy_build_verb_falls_back_to_trigger(monkeypatch):
-    captured = {}
+def test_legacy_build_verb_no_longer_triggers(monkeypatch):
+    called = {"n": 0}
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "build",
-        lambda self, job, params=None: captured.update(job=job, params=params),
+        lambda self, job, params=None: called.__setitem__("n", 1),
     )
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
-    result = _invoke(
-        "--no-colour",
-        "--no-update-check",
-        "build",
-        "my-pipeline",
-        "--param",
-        "ENV=prod",
-    )
-    assert result.exit_code == 0
-    assert "dispatch" in result.stdout
-    assert captured == {"job": "my-pipeline", "params": {"ENV": "prod"}}
-    assert "'jeeves job trigger JOB'" in result.stderr
-
-
-def test_legacy_build_verb_nested_job_path(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "build",
-        lambda self, job, params=None: captured.update(job=job),
-    )
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
-    result = _invoke("--no-colour", "--no-update-check", "build", "folder/nested-job")
-    assert result.exit_code == 0
-    assert captured["job"] == "folder/nested-job"
-    assert _NOTICE in result.stderr
-
-
-def test_build_subcommand_takes_priority_over_fallback(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient, "builds", lambda self, job, limit=20: []
-    )
-    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
-    assert result.exit_code == 0
-    assert _NOTICE not in result.stderr
-
-
-def test_new_spellings_emit_no_notice(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "jobs",
-        lambda self, folder=None, depth=0: [{"name": "deploy", "color": "blue"}],
-    )
-    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
-    assert result.exit_code == 0
-    assert _NOTICE not in result.stderr
+    result = _invoke("--no-colour", "--no-update-check", "build", "my-pipeline")
+    assert result.exit_code == 2
+    assert called["n"] == 0
 
 
 def test_bare_build_shows_group_usage():
@@ -2123,19 +1989,6 @@ def test_quiet_config_key_suppresses_greeting(tmp_path):
     result = _invoke("--no-colour", "--no-update-check", "--config", str(cfg_file))
     assert result.exit_code == 0
     assert result.output.strip() == ""
-
-
-def test_quiet_deprecation_notice_is_plain_warning(monkeypatch):
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
-    )
-    result = _invoke(
-        "--no-colour", "--no-update-check", "--quiet", "jobs", "--no-weather"
-    )
-    assert result.exit_code == 0
-    assert "Warning:" in result.stderr
-    assert "has moved to" in result.stderr
-    assert "🎩" not in result.stderr
 
 
 def test_quiet_test_report_summary_suppressed(monkeypatch):

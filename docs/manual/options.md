@@ -54,7 +54,7 @@ Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
 
 ### `--quiet`
 
-Suppress all butler personality output: the bare-invocation greeting, per-command headers, empty-state messages, and update-check notices. Errors are reduced to `Error: <message>` on stderr, and deprecation notices to `Warning: <message>`. Data tables and command output are unaffected.
+Suppress all butler personality output: the bare-invocation greeting, per-command headers, empty-state messages, and update-check notices. Errors are reduced to `Error: <message>` on stderr. Data tables and command output are unaffected.
 
 Useful for scripting when you only want the data and don't need the butler commentary.
 
