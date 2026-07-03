@@ -318,6 +318,7 @@ def main(
         else cfg.get("seasonal-calendar", "western")
     )
     no_update_check = no_update_check or cfg.get("no-update-check", False)
+    quiet = quiet or cfg.get("quiet", False)
     output_format = (
         output_format if output_format is not None else cfg.get("format", "table")
     ).lower()

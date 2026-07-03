@@ -1394,3 +1394,11 @@ def test_quiet_does_not_suppress_data(monkeypatch):
     assert result.exit_code == 0
     assert "deploy-prod" in result.stdout
     assert "test-suite" in result.stdout
+
+
+def test_quiet_config_key_suppresses_greeting(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("quiet = true\n", encoding="utf-8")
+    result = _invoke("--no-colour", "--no-update-check", "--config", str(cfg_file))
+    assert result.exit_code == 0
+    assert result.output.strip() == ""

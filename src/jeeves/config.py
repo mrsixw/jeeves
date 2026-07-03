@@ -48,6 +48,12 @@ _DEFAULT_CONFIG_CONTENT = """\
 # Equivalent to: --no-update-check
 # no-update-check = false
 
+# ----- Output -----
+
+# Suppress butler personality output (greeting, headers, empty states).
+# Equivalent to: --quiet  |  env: JEEVES_QUIET
+# quiet = false
+
 # ----- Jenkins -----
 
 # Jenkins server URL.
