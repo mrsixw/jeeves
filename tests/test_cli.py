@@ -358,7 +358,7 @@ def test_nodes_format_json_labels_as_list(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent1",
                 "offline": False,
@@ -436,7 +436,9 @@ def test_nodes_header_on_stderr_data_on_stdout(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
@@ -753,9 +755,9 @@ def test_jobs_hyperlinks_job_url(monkeypatch):
     )
     result = _invoke(
         "--no-update-check",
-        "jobs",
         "--url",
         "http://jenkins.example.com",
+        "jobs",
         "--no-weather",
         color=True,
     )
@@ -799,13 +801,15 @@ def test_nodes_hyperlinks_node_url(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
     result = _invoke(
         "--no-update-check",
-        "nodes",
         "--url",
         "http://jenkins.example.com",
+        "nodes",
         color=True,
     )
     assert result.exit_code == 0
@@ -1318,7 +1322,9 @@ def test_nodes_shows_household_staff(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [{"displayName": "agent1", "offline": False, "numExecutors": 2}],
+        lambda self, depth=0: [
+            {"displayName": "agent1", "offline": False, "numExecutors": 2}
+        ],
     )
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
@@ -1330,7 +1336,7 @@ def test_nodes_shows_online_offline_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {"displayName": "up", "offline": False, "numExecutors": 2},
             {"displayName": "down", "offline": True, "numExecutors": 0},
         ],
@@ -1342,18 +1348,98 @@ def test_nodes_shows_online_offline_labels(monkeypatch):
 
 
 def test_nodes_empty_shows_butler_message(monkeypatch):
-    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", lambda self: [])
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [])
     result = _invoke("--no-colour", "--no-update-check", "nodes")
     assert result.exit_code == 0
     assert "absented" in result.output or "notice" in result.output
     assert "🚪 The household" in result.output
 
 
+_GB = 1024**3
+
+
+def _stats_node(**monitors):
+    return {
+        "displayName": "agent-1",
+        "offline": False,
+        "numExecutors": 4,
+        "assignedLabels": [{"name": "agent-1"}, {"name": "linux"}],
+        "monitorData": monitors,
+    }
+
+
+def test_nodes_stats_table(monkeypatch):
+    node = _stats_node(
+        **{
+            "hudson.node_monitors.DiskSpaceMonitor": {"size": 3 * _GB, "path": "/"},
+            "hudson.node_monitors.TemporarySpaceMonitor": {"size": 50 * _GB},
+            "hudson.node_monitors.SwapSpaceMonitor": {"availableSwapSpace": 2 * _GB},
+            "hudson.node_monitors.ResponseTimeMonitor": {"average": 42},
+            "hudson.node_monitors.ArchitectureMonitor": "Linux (amd64)",
+        }
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes", "--stats")
+    assert result.exit_code == 0
+    # stats columns present, executors/labels columns dropped
+    assert "Disk" in result.stdout
+    assert "Response" in result.stdout
+    assert "3.0 GB" in result.stdout
+    assert "42ms" in result.stdout
+    assert "Linux (amd64)" in result.stdout
+    assert "Labels" not in result.stdout
+
+
+def test_nodes_stats_handles_missing_monitors(monkeypatch):
+    node = _stats_node()  # no monitorData entries
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-colour", "--no-update-check", "nodes", "--stats")
+    assert result.exit_code == 0
+    # unreported monitors render as a dash, no crash
+    assert "—" in result.stdout
+
+
+def test_nodes_stats_json_raw_values(monkeypatch):
+    node = _stats_node(
+        **{
+            "hudson.node_monitors.DiskSpaceMonitor": {"size": 3 * _GB},
+            "hudson.node_monitors.ResponseTimeMonitor": {"average": 42},
+        }
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    result = _invoke("--no-update-check", "--format", "json", "nodes", "--stats")
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["disk"] == 3 * _GB
+    assert data[0]["response_ms"] == 42
+    assert data[0]["swap"] is None
+
+
+def test_nodes_stats_requests_depth(monkeypatch):
+    captured = {}
+
+    def _nodes(self, depth=0):
+        captured["depth"] = depth
+        return []
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "nodes", _nodes)
+    _invoke("--no-update-check", "nodes", "--stats")
+    assert captured["depth"] == 1
+    _invoke("--no-update-check", "nodes")
+    assert captured["depth"] == 0
+
+
 def test_nodes_shows_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent-1",
                 "offline": False,
@@ -1377,7 +1463,7 @@ def test_nodes_filters_own_name_from_labels(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "build-node",
                 "offline": False,
@@ -1397,7 +1483,7 @@ def test_nodes_empty_labels_renders_blank(monkeypatch):
     monkeypatch.setattr(
         jenkins_mod.JenkinsClient,
         "nodes",
-        lambda self: [
+        lambda self, depth=0: [
             {
                 "displayName": "agent-1",
                 "offline": False,

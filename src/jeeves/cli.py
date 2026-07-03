@@ -37,6 +37,9 @@ class _Ctx:
     seasonal_calendar: str = "western"
     fmt: str = "table"
     template: str | None = None
+    url: str | None = None
+    user: str | None = None
+    token: str | None = None
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
@@ -96,40 +99,11 @@ def _butler_error(msg: str, colour: bool) -> None:
     )
 
 
-def _make_client(
-    ctx: _Ctx, url: str | None, user: str | None, token: str | None
-) -> JenkinsClient:
+def _make_client(ctx: _Ctx) -> JenkinsClient:
     cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg)
-    return JenkinsClient(url or cfg_url, user or cfg_user, token or cfg_token)
-
-
-# ── Shared connection options ────────────────────────────────────────────────
-_url_opt = click.option(
-    "--url",
-    default=None,
-    metavar="URL",
-    envvar="JEEVES_URL",
-    help="Jenkins server URL (overrides config).",
-)
-_user_opt = click.option(
-    "--user",
-    default=None,
-    metavar="USER",
-    envvar="JEEVES_USER",
-    help="Jenkins username (overrides config).",
-)
-_token_opt = click.option(
-    "--token",
-    default=None,
-    metavar="TOKEN",
-    envvar="JEEVES_TOKEN",
-    help="Jenkins API token (overrides config).",
-)
-
-
-def connection_options(f):
-    """Bundle the shared --url/--user/--token options onto a command."""
-    return _url_opt(_user_opt(_token_opt(f)))
+    return JenkinsClient(
+        ctx.url or cfg_url, ctx.user or cfg_user, ctx.token or cfg_token
+    )
 
 
 # ── Group ────────────────────────────────────────────────────────────────────
@@ -144,6 +118,28 @@ def connection_options(f):
     invoke_without_command=True,
 )
 @click.version_option(package_name="jeeves")
+# ── Connection ─────────────────────────────────────────────────────────────
+@click.option(
+    "--url",
+    default=None,
+    metavar="URL",
+    envvar="JEEVES_URL",
+    help="Jenkins server URL (overrides config).",
+)
+@click.option(
+    "--user",
+    default=None,
+    metavar="USER",
+    envvar="JEEVES_USER",
+    help="Jenkins username (overrides config).",
+)
+@click.option(
+    "--token",
+    default=None,
+    metavar="TOKEN",
+    envvar="JEEVES_TOKEN",
+    help="Jenkins API token (overrides config).",
+)
 # ── Shell completions ──────────────────────────────────────────────────────
 @click.option(
     "--completion",
@@ -242,6 +238,9 @@ def connection_options(f):
 @click.pass_context
 def main(
     ctx,
+    url,
+    user,
+    token,
     completion_shell,
     config_path,
     do_show_config,
@@ -321,6 +320,9 @@ def main(
         seasonal_calendar=seasonal_calendar or "western",
         fmt=output_format,
         template=output_template,
+        url=url,
+        user=user,
+        token=token,
     )
     ctx.ensure_object(_Ctx)
 
@@ -354,11 +356,10 @@ def main(
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def status(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def status(ctx: _Ctx) -> None:
     """Check Jenkins server health."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         data = client.status()
     except JenkinsError as exc:
@@ -575,6 +576,41 @@ def _format_duration(ms: int | None) -> str:
     return f"{hours}h{mins:02d}m"
 
 
+def _format_bytes(num: int | None) -> str:
+    """Human byte size (e.g. '12.3 GB'), or '—' when unknown."""
+    if num is None:
+        return "—"
+    size = float(num)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _node_monitor(monitor_data: dict, name: str) -> dict | str | None:
+    """Read one monitor's value from a node's monitorData (None if absent/null)."""
+    return monitor_data.get(f"hudson.node_monitors.{name}")
+
+
+def _node_stat_fields(monitor_data: dict) -> dict:
+    """Parse a node's monitorData into flat semantic stat fields."""
+
+    def _size(name: str, key: str) -> int | None:
+        value = _node_monitor(monitor_data, name)
+        return value.get(key) if isinstance(value, dict) else None
+
+    arch = _node_monitor(monitor_data, "ArchitectureMonitor")
+    return {
+        "disk": _size("DiskSpaceMonitor", "size"),
+        "temp": _size("TemporarySpaceMonitor", "size"),
+        "swap": _size("SwapSpaceMonitor", "availableSwapSpace"),
+        "response_ms": _size("ResponseTimeMonitor", "average"),
+        "clock_ms": _size("ClockMonitor", "diff"),
+        "architecture": arch if isinstance(arch, str) else None,
+    }
+
+
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
     """Parse repeated KEY=VALUE strings into a dict (raises ValueError on a bad one)."""
     parsed: dict[str, str] = {}
@@ -773,7 +809,6 @@ def _emit(
 
 
 @main.command()
-@connection_options
 @click.option(
     "--folder", default=None, metavar="NAME", help="Limit to a Jenkins folder."
 )
@@ -802,9 +837,6 @@ def _emit(
 @pass_ctx
 def jobs(
     ctx: _Ctx,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     folder: str | None,
     no_weather: bool,
     expand: bool,
@@ -815,7 +847,7 @@ def jobs(
         click.echo(_render_type_key(), color=ctx.colour)
         return
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     depth = 0 if no_weather else 1
     try:
         job_list = client.jobs(folder=folder, depth=depth)
@@ -847,7 +879,6 @@ def jobs(
 
 @main.command()
 @click.argument("job")
-@connection_options
 @click.option(
     "--param",
     "params",
@@ -859,9 +890,6 @@ def jobs(
 def build(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     params: tuple[str, ...],
 ) -> None:
     """Trigger a Jenkins build.
@@ -878,7 +906,7 @@ def build(
         )
         sys.exit(1)
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         client.build(job, params=param_dict or None)
     except JenkinsError as exc:
@@ -1025,17 +1053,13 @@ def builds() -> None:
 
 @builds.command("summary")
 @click.argument("job")
-@connection_options
 @pass_ctx
 def builds_summary(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
 ) -> None:
     """Show a job's last, last-successful, and last-failed builds."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         records = [
             _build_record(permalink, label, client.build_info(job, permalink))
@@ -1059,7 +1083,6 @@ def builds_summary(
 
 @builds.command("list")
 @click.argument("job")
-@connection_options
 @click.option(
     "--limit", default=20, metavar="N", type=int, help="Maximum builds to show."
 )
@@ -1081,9 +1104,6 @@ def builds_summary(
 def builds_list(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     limit: int,
     result_filter: str | None,
     param_filters: tuple[str, ...],
@@ -1099,7 +1119,7 @@ def builds_list(
         )
         sys.exit(1)
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         raw = client.builds(job, limit=limit)
     except JenkinsError as exc:
@@ -1129,18 +1149,14 @@ def builds_list(
 @builds.command("show")
 @click.argument("job")
 @click.argument("build", default="lastBuild")
-@connection_options
 @pass_ctx
 def builds_show(
     ctx: _Ctx,
     job: str,
     build: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
 ) -> None:
     """Show a single build (by number, or a permalink like lastBuild)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         info = client.build_info(job, build)
     except JenkinsError as exc:
@@ -1184,17 +1200,13 @@ def _param_records(job_json: dict) -> list[dict]:
 
 @main.command()
 @click.argument("job")
-@connection_options
 @pass_ctx
 def params(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
 ) -> None:
     """Show a job's build parameters (name, type, default, choices)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         job_json = client.job(job)
     except JenkinsError as exc:
@@ -1240,7 +1252,6 @@ def _params_from_build(info: dict) -> dict[str, str]:
 
 @main.command()
 @click.argument("job")
-@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1259,9 +1270,6 @@ def _params_from_build(info: dict) -> dict[str, str]:
 def rebuild(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     build_id: str,
     overrides: tuple[str, ...],
 ) -> None:
@@ -1276,7 +1284,7 @@ def rebuild(
         )
         sys.exit(1)
 
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         info = client.build_info(job, build_id)
         if info is None:
@@ -1303,7 +1311,6 @@ def rebuild(
 
 @main.command()
 @click.argument("job")
-@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1315,16 +1322,13 @@ def rebuild(
 def log(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     build_id: str,
 ) -> None:
     """Show the console log for a build.
 
     JOB is the job name. Use --build to specify a build number.
     """
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         text = client.log(job, build=build_id)
     except JenkinsError as exc:
@@ -1338,11 +1342,10 @@ def log(
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def queue(ctx: _Ctx) -> None:
     """Show the Jenkins build queue."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         items = client.queue()
     except JenkinsError as exc:
@@ -1406,7 +1409,6 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
 @main.command()
 @click.argument("job")
-@connection_options
 @click.option(
     "--build",
     "build_id",
@@ -1419,16 +1421,13 @@ def queue(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 def cancel(
     ctx: _Ctx,
     job: str,
-    url: str | None,
-    user: str | None,
-    token: str | None,
     build_id: int,
 ) -> None:
     """Cancel a running Jenkins build.
 
     JOB is the job name. --build N is required.
     """
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         client.cancel(job, build_id)
     except JenkinsError as exc:
@@ -1444,14 +1443,29 @@ def cancel(
 # ── nodes ───────────────────────────────────────────────────────────────────
 
 
+def _disk_table_cell(num: int | None, colour: bool) -> str:
+    """Free-disk cell with threshold colouring (low = red)."""
+    text = _format_bytes(num)
+    if not colour or num is None:
+        return text
+    gb = num / (1024**3)
+    fg = "red" if gb < 5 else "yellow" if gb < 20 else "green"
+    return click.style(text, fg=fg)
+
+
 @main.command()
-@connection_options
+@click.option(
+    "--stats",
+    is_flag=True,
+    default=False,
+    help="Show node health metrics (disk, temp, swap, response time, arch).",
+)
 @pass_ctx
-def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def nodes(ctx: _Ctx, stats: bool) -> None:
     """List Jenkins build nodes (agents)."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
-        node_list = client.nodes()
+        node_list = client.nodes(depth=1 if stats else 0)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour)
         sys.exit(1)
@@ -1464,15 +1478,16 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
         raw_labels = [
             lbl["name"] for lbl in n.get("assignedLabels", []) if "name" in lbl
         ]
-        records.append(
-            {
-                "name": display_name,
-                "status": "offline" if n.get("offline", False) else "online",
-                "executors": n.get("numExecutors", "?"),
-                "labels": [lbl for lbl in raw_labels if lbl != display_name],
-                "url": f"{client._base}/computer/{url_name}/",
-            }
-        )
+        record = {
+            "name": display_name,
+            "status": "offline" if n.get("offline", False) else "online",
+            "executors": n.get("numExecutors", "?"),
+            "labels": [lbl for lbl in raw_labels if lbl != display_name],
+            "url": f"{client._base}/computer/{url_name}/",
+        }
+        if stats:
+            record.update(_node_stat_fields(n.get("monitorData") or {}))
+        records.append(record)
 
     def name_table(r: dict, i: int) -> str:
         s = _hyperlink(r["name"], r["url"], ctx.colour)
@@ -1504,17 +1519,60 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
             parts.append(linked)
         return ", ".join(parts)
 
-    columns = [
-        Column("name", "Node", table=name_table, plain=lambda r: r["name"]),
-        Column("status", "Status", table=status_table),
-        Column("executors", "Executors", table=executors_table),
-        Column(
-            "labels",
-            "Labels",
-            table=labels_table,
-            plain=lambda r: ", ".join(r["labels"]),
-        ),
-    ]
+    name_col = Column("name", "Node", table=name_table, plain=lambda r: r["name"])
+    status_col = Column("status", "Status", table=status_table)
+
+    if stats:
+        columns = [
+            name_col,
+            status_col,
+            Column(
+                "disk",
+                "Disk",
+                table=lambda r, _i: _disk_table_cell(r["disk"], ctx.colour),
+                plain=lambda r: _format_bytes(r["disk"]),
+            ),
+            Column(
+                "temp",
+                "Temp",
+                table=lambda r, _i: _format_bytes(r["temp"]),
+                plain=lambda r: _format_bytes(r["temp"]),
+            ),
+            Column(
+                "swap",
+                "Swap",
+                table=lambda r, _i: _format_bytes(r["swap"]),
+                plain=lambda r: _format_bytes(r["swap"]),
+            ),
+            Column(
+                "response_ms",
+                "Response",
+                table=lambda r, _i: (
+                    "—" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+                plain=lambda r: (
+                    "" if r["response_ms"] is None else f"{int(r['response_ms'])}ms"
+                ),
+            ),
+            Column(
+                "architecture",
+                "Arch",
+                plain=lambda r: r["architecture"] or "",
+                table=lambda r, _i: r["architecture"] or "—",
+            ),
+        ]
+    else:
+        columns = [
+            name_col,
+            status_col,
+            Column("executors", "Executors", table=executors_table),
+            Column(
+                "labels",
+                "Labels",
+                table=labels_table,
+                plain=lambda r: ", ".join(r["labels"]),
+            ),
+        ]
     _emit(
         ctx,
         records,
@@ -1531,11 +1589,10 @@ def nodes(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> No
 
 
 @main.command()
-@connection_options
 @pass_ctx
-def whoami(ctx: _Ctx, url: str | None, user: str | None, token: str | None) -> None:
+def whoami(ctx: _Ctx) -> None:
     """Show the currently authenticated Jenkins user."""
-    client = _make_client(ctx, url, user, token)
+    client = _make_client(ctx)
     try:
         data = client.whoami()
     except JenkinsError as exc:

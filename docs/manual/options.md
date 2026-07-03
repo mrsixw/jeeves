@@ -1,5 +1,18 @@
 # Options Reference
 
+## Connection
+
+`--url`, `--user`, and `--token` are **global** flags — give them before the
+command:
+
+```bash
+jeeves --url https://ci.example.com --user me --token *** jobs
+```
+
+They override the config file, and each has an environment variable
+(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). Config keys live under
+`[jenkins]` in `config.toml`.
+
 ## Display options
 
 ### `--theme`
@@ -70,7 +83,7 @@ Structured formats (`json`, `ndjson`) emit semantic values, never the
 decorative emoji. The JSON keys per command:
 
 - **jobs**: `name`, `type`, `color`, `status`, `health`, `url`
-- **nodes**: `name`, `status`, `executors`, `labels`, `url`
+- **nodes**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
 - **queue**: `name`, `reason`, `stuck`, `url`
 
 ### `--template`

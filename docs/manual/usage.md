@@ -43,6 +43,14 @@ jeeves rebuild my-pipeline                   # re-run lastBuild with its paramet
 jeeves rebuild my-pipeline --param ENV=staging   # ...overriding one of them
 ```
 
+## Nodes
+
+```bash
+jeeves nodes                 # online/offline, executors, labels
+jeeves nodes --stats         # + disk, temp, swap, response time, architecture
+jeeves --format json nodes --stats   # raw byte/ms values for scripting
+```
+
 ## Config file
 
 ```bash

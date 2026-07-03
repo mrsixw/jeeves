@@ -159,8 +159,10 @@ class JenkinsClient:
         job_path = _normalize_jenkins_path(job)
         self._post(f"{job_path}/{build}/stop")
 
-    def nodes(self) -> list[dict]:
-        return self._get("computer").get("computer", [])
+    def nodes(self, depth: int = 0) -> list[dict]:
+        """List nodes. ``depth=1`` populates per-node ``monitorData`` (stats)."""
+        params = {"depth": depth} if depth else None
+        return self._get("computer", params=params).get("computer", [])
 
     def whoami(self) -> dict:
         return self._get("me")

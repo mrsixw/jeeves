@@ -22,7 +22,7 @@
 | `jeeves log JOB [--build N]` | Show build console output |
 | `jeeves queue` | Show the build queue |
 | `jeeves cancel JOB --build N` | Cancel a running build |
-| `jeeves nodes` | List build nodes (agents) |
+| `jeeves nodes [--stats]` | List build nodes (agents); `--stats` adds health metrics |
 
 ## Installation
 

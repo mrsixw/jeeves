@@ -370,6 +370,14 @@ def test_nodes_empty(client: JenkinsClient) -> None:
     assert result == []
 
 
+def test_nodes_depth_passes_query_param(client: JenkinsClient) -> None:
+    payload = {"computer": [{"displayName": "agent1", "monitorData": {}}]}
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/computer/api/json", json=payload)
+        client.nodes(depth=1)
+    assert m.last_request.qs == {"depth": ["1"]}
+
+
 # ── auth ────────────────────────────────────────────────────────────────────
 
 
