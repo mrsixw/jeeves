@@ -118,7 +118,7 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )
-@click.version_option(package_name="jeeves")
+@click.version_option(package_name="jeeves", prog_name="jeeves")
 # ── Connection ─────────────────────────────────────────────────────────────
 @click.option(
     "--url",
