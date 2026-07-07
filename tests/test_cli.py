@@ -1537,6 +1537,142 @@ def test_nodes_empty_labels_renders_blank(monkeypatch):
     assert "Labels" in result.output
 
 
+_SSH_NODE_XML = """<slave>
+  <name>ssh-agent</name>
+  <launcher class="hudson.plugins.sshslaves.SSHLauncher">
+    <host>10.0.4.17</host>
+    <port>22</port>
+  </launcher>
+</slave>"""
+
+_JNLP_NODE_XML = """<slave>
+  <name>inbound-agent</name>
+  <launcher class="hudson.slaves.JNLPLauncher"/>
+</slave>"""
+
+
+def test_nodes_address_shows_ssh_host(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "Built-In Node", "offline": False, "numExecutors": 2},
+            {"displayName": "ssh-agent", "offline": False, "numExecutors": 4},
+        ],
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "node_config", lambda self, name: _SSH_NODE_XML
+    )
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--address")
+    assert result.exit_code == 0
+    assert "Address" in result.output
+    assert "10.0.4.17" in result.output
+    assert "(local)" in result.output
+
+
+def test_nodes_address_inbound_agent_shows_dash(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "inbound-agent", "offline": False, "numExecutors": 1}
+        ],
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "node_config", lambda self, name: _JNLP_NODE_XML
+    )
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--address")
+    assert result.exit_code == 0
+    assert "—" in result.stdout
+
+
+def test_nodes_address_permission_error_degrades_to_dash(monkeypatch):
+    def _forbidden(self, name):
+        raise JenkinsError("Jenkins returned 403")
+
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "locked-agent", "offline": False, "numExecutors": 1}
+        ],
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "node_config", _forbidden)
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--address")
+    assert result.exit_code == 0
+    assert "locked-agent" in result.stdout
+    assert "—" in result.stdout
+
+
+def test_nodes_address_works_with_stats(monkeypatch):
+    node = _stats_node(**{"hudson.node_monitors.ResponseTimeMonitor": {"average": 42}})
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "nodes", lambda self, depth=0: [node]
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "node_config", lambda self, name: _SSH_NODE_XML
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "node", "list", "--stats", "--address"
+    )
+    assert result.exit_code == 0
+    assert "Response" in result.stdout
+    assert "10.0.4.17" in result.stdout
+
+
+def test_nodes_address_json_semantic_value(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "ssh-agent", "offline": False, "numExecutors": 4}
+        ],
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "node_config", lambda self, name: _SSH_NODE_XML
+    )
+    result = _invoke(
+        "--no-update-check", "--format", "json", "node", "list", "--address"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["address"] == "10.0.4.17"
+
+
+def test_nodes_no_address_flag_skips_config_fetch(monkeypatch):
+    def _boom(self, name):
+        raise AssertionError("node_config must not be called without --address")
+
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "ssh-agent", "offline": False, "numExecutors": 4}
+        ],
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "node_config", _boom)
+    result = _invoke("--no-colour", "--no-update-check", "node", "list")
+    assert result.exit_code == 0
+    data = result.output
+    assert "Address" not in data
+
+
+def test_nodes_address_malformed_xml_degrades_to_dash(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "nodes",
+        lambda self, depth=0: [
+            {"displayName": "odd-agent", "offline": False, "numExecutors": 1}
+        ],
+    )
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "node_config", lambda self, name: "<not-xml"
+    )
+    result = _invoke("--no-colour", "--no-update-check", "node", "list", "--address")
+    assert result.exit_code == 0
+    assert "—" in result.stdout
+
+
 # ── whoami ────────────────────────────────────────────────────────────────────
 
 
