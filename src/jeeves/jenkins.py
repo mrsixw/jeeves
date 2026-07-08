@@ -164,5 +164,10 @@ class JenkinsClient:
         params = {"depth": depth} if depth else None
         return self._get("computer", params=params).get("computer", [])
 
+    def node_config(self, name: str) -> str:
+        """Fetch a node's config.xml (raw XML). The built-in node has none."""
+        url = f"{self._base}/computer/{name}/config.xml"
+        return self._request("GET", url, timeout=10).text
+
     def whoami(self) -> dict:
         return self._get("me")

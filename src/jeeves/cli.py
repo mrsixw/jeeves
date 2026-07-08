@@ -12,6 +12,7 @@ import sys
 import time
 import webbrowser
 from dataclasses import dataclass, field
+from xml.etree import ElementTree
 
 import click
 from tabulate import tabulate
@@ -644,6 +645,39 @@ def _node_stat_fields(monitor_data: dict) -> dict:
         "clock_ms": _size("ClockMonitor", "diff"),
         "architecture": arch if isinstance(arch, str) else None,
     }
+
+
+def _node_host_from_config(config_xml: str) -> str | None:
+    """Extract the launcher host (IP or hostname) from a node's config.xml.
+
+    Only launchers that dial out to the agent (e.g. SSH) configure a host;
+    inbound (JNLP) agents connect to Jenkins themselves, so there is nothing
+    to report and None is returned.
+    """
+    try:
+        root = ElementTree.fromstring(config_xml)
+    except ElementTree.ParseError:
+        return None
+    launcher = root.find("launcher")
+    if launcher is None:
+        return None
+    host = (launcher.findtext(".//host") or "").strip()
+    return host or None
+
+
+def _node_address(client: JenkinsClient, name: str, is_built_in: bool) -> str | None:
+    """Resolve a node's address via its config.xml (None when unavailable).
+
+    The built-in node runs inside the controller and has no config.xml.
+    Permission errors (config.xml needs Extended Read) degrade to None
+    rather than failing the whole listing.
+    """
+    if is_built_in:
+        return "(local)"
+    try:
+        return _node_host_from_config(client.node_config(name))
+    except JenkinsError:
+        return None
 
 
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
@@ -1488,8 +1522,14 @@ def _disk_table_cell(num: int | None, colour: bool) -> str:
     default=False,
     help="Show node health metrics (disk, temp, swap, response time, arch).",
 )
+@click.option(
+    "--address",
+    is_flag=True,
+    default=False,
+    help="Show each node's launcher host/IP (one extra request per node).",
+)
 @pass_ctx
-def node_list(ctx: _Ctx, stats: bool) -> None:
+def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
     """List Jenkins build nodes (agents)."""
     client = _make_client(ctx)
     try:
@@ -1515,6 +1555,10 @@ def node_list(ctx: _Ctx, stats: bool) -> None:
         }
         if stats:
             record.update(_node_stat_fields(n.get("monitorData") or {}))
+        if address:
+            record["address"] = _node_address(
+                client, display_name, display_name in built_in
+            )
         records.append(record)
 
     def name_table(r: dict, i: int) -> str:
@@ -1601,6 +1645,15 @@ def node_list(ctx: _Ctx, stats: bool) -> None:
                 plain=lambda r: ", ".join(r["labels"]),
             ),
         ]
+    if address:
+        columns.append(
+            Column(
+                "address",
+                "Address",
+                table=lambda r, _i: r["address"] or "—",
+                plain=lambda r: r["address"] or "",
+            )
+        )
     _emit(
         ctx,
         records,

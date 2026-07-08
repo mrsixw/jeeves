@@ -378,6 +378,23 @@ def test_nodes_depth_passes_query_param(client: JenkinsClient) -> None:
     assert m.last_request.qs == {"depth": ["1"]}
 
 
+# ── node_config ──────────────────────────────────────────────────────────────
+
+
+def test_node_config_returns_xml(client: JenkinsClient) -> None:
+    xml = "<slave><launcher><host>10.0.4.17</host></launcher></slave>"
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/computer/agent1/config.xml", text=xml)
+        assert client.node_config("agent1") == xml
+
+
+def test_node_config_http_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/computer/agent1/config.xml", status_code=403)
+        with pytest.raises(JenkinsError, match="403"):
+            client.node_config("agent1")
+
+
 # ── auth ────────────────────────────────────────────────────────────────────
 
 
