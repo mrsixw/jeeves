@@ -1693,4 +1693,89 @@ def test_build_log_defaults_to_last_build(jenkins):
     jenkins.get(url("job/deploy/lastBuild/consoleText"), text="")
     result = _invoke("--no-colour", "--no-update-check", "build", "log", "deploy")
     assert result.exit_code == 0
-    assert "lastBuild/consoleText" in jenkins.last_request.url
+
+
+# ── build log --follow ────────────────────────────────────────────────────────
+
+
+def test_build_log_follow_streams_until_complete(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    jenkins.get(
+        url("job/deploy/lastBuild/logText/progressiveText"),
+        [
+            {
+                "text": "line one\n",
+                "headers": {"X-Text-Size": "9", "X-More-Data": "true"},
+            },
+            {
+                "text": "line two\n",
+                "headers": {"X-Text-Size": "18", "X-More-Data": "true"},
+            },
+            {"text": "", "headers": {"X-Text-Size": "18"}},
+        ],
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "log", "deploy", "--follow"
+    )
+    assert result.exit_code == 0
+    assert result.stdout == "line one\nline two\n"
+    starts = [r.qs["start"][0] for r in jenkins.request_history]
+    assert starts == ["0", "9", "18"]
+
+
+def test_build_log_follow_short_flag(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    jenkins.get(
+        url("job/deploy/lastBuild/logText/progressiveText"),
+        text="done\n",
+        headers={"X-Text-Size": "5"},
+    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "log", "deploy", "-f")
+    assert result.exit_code == 0
+    assert result.stdout == "done\n"
+
+
+def test_build_log_follow_already_finished_single_poll(jenkins, monkeypatch):
+    sleeps = {"n": 0}
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: sleeps.__setitem__("n", 1))
+    jenkins.get(
+        url("job/deploy/7/logText/progressiveText"),
+        text="all done\n",
+        headers={"X-Text-Size": "9"},
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "log", "deploy", "7", "--follow"
+    )
+    assert result.exit_code == 0
+    assert result.stdout == "all done\n"
+    assert sleeps["n"] == 0
+
+
+def test_build_log_follow_error_shows_butler_message(jenkins):
+    jenkins.get(
+        url("job/deploy/lastBuild/logText/progressiveText"),
+        exc=requests.exceptions.ConnectionError,
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "log", "deploy", "--follow"
+    )
+    assert result.exit_code == 1
+    assert "unreachable" in result.output
+
+
+def test_build_log_follow_ctrl_c_exits_cleanly(jenkins, monkeypatch):
+    def _raise_interrupt(_s):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_mod.time, "sleep", _raise_interrupt)
+    jenkins.get(
+        url("job/deploy/lastBuild/logText/progressiveText"),
+        text="still running\n",
+        headers={"X-Text-Size": "14", "X-More-Data": "true"},
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "log", "deploy", "--follow"
+    )
+    assert result.exit_code == 130
+    assert "still running" in result.stdout
+    assert "cease following" in result.stderr

@@ -152,6 +152,22 @@ class JenkinsClient:
         url = f"{self._base}/{job_path}/{build}/consoleText"
         return self._request("GET", url, timeout=30).text
 
+    def progressive_log(
+        self, job: str, build: int | str = "lastBuild", start: int = 0
+    ) -> tuple[str, int, bool]:
+        """Fetch one chunk of a build's console log from ``start`` onward.
+
+        Returns ``(text, next_start, more_data)``; ``more_data`` is true
+        while the build is still producing output, so callers can poll
+        with ``start=next_start`` until it goes false.
+        """
+        job_path = _normalize_jenkins_path(job)
+        url = f"{self._base}/{job_path}/{build}/logText/progressiveText"
+        resp = self._request("GET", url, params={"start": start}, timeout=30)
+        next_start = int(resp.headers.get("X-Text-Size", start))
+        more_data = resp.headers.get("X-More-Data", "").lower() == "true"
+        return resp.text, next_start, more_data
+
     def queue(self) -> list[dict]:
         return self._get("queue").get("items", [])
 
