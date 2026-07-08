@@ -1555,6 +1555,180 @@ def test_whoami_error_shows_butler_message(jenkins):
     assert "unreachable" in result.output
 
 
+# ── connection profiles ───────────────────────────────────────────────────────
+
+
+def _profiles_config(tmp_path, head=""):
+    """Write a two-profile config; ``head`` prepends top-level keys."""
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        head + '[profiles.prod]\nurl = "http://prod.example.com"\n'
+        'token = "prod-secret"\n'
+        '\n[profiles.staging]\nurl = "http://staging.example.com"\n'
+    )
+    return str(cfg_file)
+
+
+def test_profile_flag_routes_to_profile_url(jenkins, tmp_path):
+    jenkins.get("http://prod.example.com/api/json", json=_STATUS_JSON)
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "--profile",
+        "prod",
+        "status",
+    )
+    assert result.exit_code == 0
+    # the fixture's JEEVES_URL is demoted; the profile URL wins
+    assert jenkins.last_request.url.startswith("http://prod.example.com")
+
+
+def test_profile_env_var_selects_profile(jenkins, tmp_path, monkeypatch):
+    monkeypatch.setenv("JEEVES_PROFILE", "staging")
+    jenkins.get("http://staging.example.com/api/json", json=_STATUS_JSON)
+    cfg = _profiles_config(tmp_path)
+    result = _invoke("--no-colour", "--no-update-check", "--config", cfg, "status")
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://staging.example.com")
+
+
+def test_profile_flag_beats_env_profile(jenkins, tmp_path, monkeypatch):
+    monkeypatch.setenv("JEEVES_PROFILE", "staging")
+    jenkins.get("http://prod.example.com/api/json", json=_STATUS_JSON)
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "--profile",
+        "prod",
+        "status",
+    )
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://prod.example.com")
+
+
+def test_default_profile_config_key(jenkins, tmp_path):
+    jenkins.get("http://prod.example.com/api/json", json=_STATUS_JSON)
+    cfg = _profiles_config(tmp_path, head='default-profile = "prod"\n\n')
+    result = _invoke("--no-colour", "--no-update-check", "--config", cfg, "status")
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://prod.example.com")
+
+
+def test_explicit_url_flag_overrides_profile(jenkins, tmp_path):
+    jenkins.get(api(), json=_STATUS_JSON)
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "--profile",
+        "prod",
+        "--url",
+        "http://jenkins.example.com",
+        "status",
+    )
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://jenkins.example.com")
+
+
+def test_profile_missing_field_falls_back_to_env(jenkins, tmp_path):
+    # profile has no url; the fixture's JEEVES_URL fills the gap
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('[profiles.bare]\ntoken = "abc"\n')
+    jenkins.get(api(), json=_STATUS_JSON)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        str(cfg_file),
+        "--profile",
+        "bare",
+        "status",
+    )
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://jenkins.example.com")
+
+
+def test_unknown_profile_butler_error(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "--profile",
+        "bogus",
+        "status",
+    )
+    assert result.exit_code == 1
+    assert "🎩" in result.stderr
+    assert "bogus" in result.stderr
+    assert "prod" in result.stderr
+    assert "staging" in result.stderr
+
+
+def test_unknown_default_profile_errors(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('default-profile = "gone"\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", str(cfg_file), "status"
+    )
+    assert result.exit_code == 1
+    assert "gone" in result.stderr
+    assert "No profiles are configured" in result.stderr
+
+
+def test_show_config_lists_profiles_and_masks_tokens(tmp_path, monkeypatch):
+    # --show-config must work even when JEEVES_PROFILE points at nothing
+    monkeypatch.setenv("JEEVES_PROFILE", "bogus")
+    cfg = _profiles_config(tmp_path)
+    result = _invoke("--config", cfg, "--show-config")
+    assert result.exit_code == 0
+    assert "prod" in result.output
+    assert "staging" in result.output
+    assert "prod-secret" not in result.output
+    assert "***" in result.output
+
+
+def test_flat_config_still_works(jenkins, tmp_path, monkeypatch):
+    monkeypatch.delenv("JEEVES_URL", raising=False)
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('jenkins-url = "http://flat.example.com"\n')
+    jenkins.get("http://flat.example.com/api/json", json=_STATUS_JSON)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", str(cfg_file), "status"
+    )
+    assert result.exit_code == 0
+    assert jenkins.last_request.url.startswith("http://flat.example.com")
+
+
+def test_complete_profile_returns_matching_names(tmp_path):
+    from types import SimpleNamespace
+
+    cfg = _profiles_config(tmp_path)
+    ctx = SimpleNamespace(params={"config_path": cfg})
+    items = cli_mod._complete_profile(ctx, None, "")
+    assert [i.value for i in items] == ["prod", "staging"]
+    items = cli_mod._complete_profile(ctx, None, "st")
+    assert [i.value for i in items] == ["staging"]
+
+
+def test_complete_profile_bad_config_returns_empty(tmp_path):
+    from types import SimpleNamespace
+
+    bad = tmp_path / "bad.toml"
+    bad.write_text("not = [valid toml")
+    ctx = SimpleNamespace(params={"config_path": str(bad)})
+    assert cli_mod._complete_profile(ctx, None, "") == []
+
+
 # ── deprecated aliases ────────────────────────────────────────────────────────
 
 _NOTICE = "has moved to"

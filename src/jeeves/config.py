@@ -61,6 +61,27 @@ _DEFAULT_CONFIG_CONTENT = """\
 # Jenkins API token (Jenkins → Your Name → Configure → API Token).
 # Equivalent to: --token <token>  |  env: JEEVES_TOKEN
 # jenkins-token = ""
+
+# ----- Connection profiles -----
+
+# Named connection profiles for multiple Jenkins servers.
+# Select one with --profile <name> or env: JEEVES_PROFILE, or set a
+# default below. When a profile is active the flat jenkins-* keys above
+# are ignored; missing profile fields fall back to the JEEVES_URL /
+# JEEVES_USER / JEEVES_TOKEN environment variables.
+
+# Profile to use when --profile / JEEVES_PROFILE is not given.
+# default-profile = "prod"
+
+# [profiles.prod]
+# url = "https://jenkins.prod.example.com"
+# username = ""
+# token = ""
+
+# [profiles.staging]
+# url = "https://jenkins.staging.example.com"
+# username = ""
+# token = ""
 """
 
 
@@ -96,14 +117,47 @@ def write_default_config() -> Path:
     return config_path
 
 
-def get_jenkins_config(cfg: dict) -> tuple[str, str, str]:
-    """Extract Jenkins connection settings from config, falling back to env vars."""
+def list_profiles(cfg: dict) -> list[str]:
+    """Return the sorted names of connection profiles defined in the config."""
+    profiles = cfg.get("profiles")
+    if not isinstance(profiles, dict):
+        return []
+    return sorted(name for name, entry in profiles.items() if isinstance(entry, dict))
+
+
+def get_jenkins_config(cfg: dict, profile: str | None = None) -> tuple[str, str, str]:
+    """Extract Jenkins connection settings from config, falling back to env vars.
+
+    With ``profile``, settings come from ``[profiles.<name>]`` and the flat
+    jenkins-* keys are never consulted; missing fields fall back to env vars.
+    Raises ``ValueError`` for an unknown profile (the CLI validates first).
+    """
+    if profile is not None:
+        profiles = cfg.get("profiles")
+        entry = profiles.get(profile) if isinstance(profiles, dict) else None
+        if not isinstance(entry, dict):
+            raise ValueError(f"Unknown profile {profile!r}")
+        url = entry.get("url") or os.environ.get("JEEVES_URL", "http://localhost:8080")
+        username = entry.get("username") or os.environ.get("JEEVES_USER", "")
+        token = entry.get("token") or os.environ.get("JEEVES_TOKEN", "")
+        return url, username, token
+
     url = cfg.get("jenkins-url") or os.environ.get(
         "JEEVES_URL", "http://localhost:8080"
     )
     username = cfg.get("jenkins-username") or os.environ.get("JEEVES_USER", "")
     token = cfg.get("jenkins-token") or os.environ.get("JEEVES_TOKEN", "")
     return url, username, token
+
+
+_MASKED_KEYS = ("jenkins-token", "token")
+
+
+def _display_value(key: str, value: object) -> str:
+    """Repr for display, masking credential values (never mutates the config)."""
+    if key in _MASKED_KEYS and value:
+        return repr("***")
+    return repr(value)
 
 
 def show_config(cfg: dict, config_path: str | None = None) -> str:
@@ -116,8 +170,21 @@ def show_config(cfg: dict, config_path: str | None = None) -> str:
         lines.append(f"Config file: {found or '(none found)'}")
     lines.append("")
     if cfg:
+        profiles = cfg.get("profiles")
         for key, value in sorted(cfg.items()):
-            lines.append(f"  {key} = {value!r}")
+            if key == "profiles" and isinstance(profiles, dict):
+                continue
+            lines.append(f"  {key} = {_display_value(key, value)}")
+        if isinstance(profiles, dict):
+            lines.append("  profiles:")
+            for name, entry in sorted(profiles.items()):
+                if not isinstance(entry, dict):
+                    lines.append(f"    {name} = {entry!r}")
+                    continue
+                fields = " ".join(
+                    f"{k}={_display_value(k, v)}" for k, v in sorted(entry.items())
+                )
+                lines.append(f"    {name}: {fields}")
     else:
         lines.append("  (no config keys set)")
     return "\n".join(lines)

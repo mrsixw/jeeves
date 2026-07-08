@@ -10,8 +10,54 @@ jeeves --url https://ci.example.com --user me --token *** job list
 ```
 
 They override the config file, and each has an environment variable
-(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). Config keys live under
-`[jenkins]` in `config.toml`.
+(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). The config keys are flat,
+top-level entries in `config.toml`:
+
+```toml
+jenkins-url = "https://ci.example.com"
+jenkins-username = "me"
+jenkins-token = "..."
+```
+
+### Connection profiles (`--profile`)
+
+Define one `[profiles.NAME]` table per Jenkins server to switch between
+instances without retyping credentials:
+
+```toml
+default-profile = "prod"        # optional: used when --profile is not given
+
+[profiles.prod]
+url = "https://jenkins.prod.example.com"
+username = "me"
+token = "..."
+
+[profiles.staging]
+url = "https://jenkins.staging.example.com"
+```
+
+```bash
+jeeves --profile staging job list
+JEEVES_PROFILE=staging jeeves status    # env alternative to the flag
+```
+
+Which profile is active: `--profile` beats `JEEVES_PROFILE`, which beats
+`default-profile`. Without any of these, the flat `jenkins-*` keys apply
+exactly as before.
+
+When a profile is active:
+
+- the flat `jenkins-*` keys are ignored entirely — a profile is
+  self-contained;
+- fields the profile omits fall back to `JEEVES_URL` / `JEEVES_USER` /
+  `JEEVES_TOKEN`, then to the built-in defaults;
+- `JEEVES_URL`-style environment variables **no longer override** the
+  profile's own fields (they are demoted to fallbacks) — but explicit
+  `--url` / `--user` / `--token` flags still win per field.
+
+An unknown profile name is refused up front with the list of configured
+profiles. Profile names needing dots or spaces must be TOML-quoted:
+`[profiles."my.prod"]`.
 
 ## Display options
 
