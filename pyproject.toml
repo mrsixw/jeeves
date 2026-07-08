@@ -16,6 +16,7 @@ dependencies = [
   "requests",
   "tabulate",
   "tomli; python_version < '3.11'",
+  "tomlkit>=0.15.0",
 ]
 
 [project.scripts]

@@ -19,9 +19,13 @@ from tabulate import tabulate
 
 from . import render as _render
 from .config import (
+    UnknownProfileError,
+    add_profile,
     get_jenkins_config,
     list_profiles,
     load_config,
+    remove_profile,
+    set_default_profile,
     show_config,
     write_default_config,
 )
@@ -49,6 +53,7 @@ class _Ctx:
     user: str | None = None
     token: str | None = None
     profile: str | None = None
+    config_path: str | None = None
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
@@ -73,6 +78,17 @@ def _complete_profile(ctx, param, incomplete) -> list:
 def _isatty() -> bool:
     """Whether stdout is an interactive terminal (seam for testing)."""
     return sys.stdout.isatty()
+
+
+def _butler_fail(text: str, colour: bool) -> None:
+    """Emit a pre-worded butler error to stderr and exit 1."""
+    click.echo(click.style(f"🎩 {text}", fg="red"), err=True, color=colour)
+    sys.exit(1)
+
+
+def _butler_bother(exc: Exception, colour: bool) -> None:
+    """Generic 'spot of bother' failure for unexpected errors."""
+    _butler_fail(f"I'm afraid there's been a spot of bother, sir: {exc}", colour)
 
 
 def _butler_error(msg: str, colour: bool) -> None:
@@ -327,17 +343,20 @@ def main(
         sys.exit(0)
 
     # ── Profile resolution ──────────────────────────────────────────────────
+    # The profile group manages the config itself and must stay usable even
+    # when default-profile points at nothing, so it skips validation.
     profile = profile or cfg.get("default-profile") or None
-    if profile is not None:
+    if profile is not None and ctx.invoked_subcommand != "profile":
         available = list_profiles(cfg)
         if profile not in available:
             if available:
                 detail = f"The profiles at my disposal are: {', '.join(available)}."
             else:
                 detail = "No profiles are configured at all."
-            text = f"I regret I know of no profile called '{profile}', sir. {detail}"
-            click.echo(click.style(f"🎩 {text}", fg="red"), err=True, color=colour)
-            sys.exit(1)
+            _butler_fail(
+                f"I regret I know of no profile called '{profile}', sir. {detail}",
+                colour,
+            )
         # A profile's fields beat env vars; env-sourced --url/--user/--token
         # values would otherwise override them at flag level. Genuine
         # command-line flags keep their per-field override.
@@ -382,6 +401,7 @@ def main(
         user=user,
         token=token,
         profile=profile,
+        config_path=config_path,
     )
     ctx.ensure_object(_Ctx)
 
@@ -485,6 +505,205 @@ def build() -> None:
 @main.group("node")
 def node_group() -> None:
     """Work with Jenkins build nodes (agents)."""
+
+
+@main.group("profile")
+def profile_group() -> None:
+    """Manage named connection profiles in the config file."""
+
+
+# ── profile management ───────────────────────────────────────────────────────
+
+
+def _read_secret(label: str) -> str:
+    """Read a secret from a hidden prompt (TTY) or stdin (pipe)."""
+    if sys.stdin.isatty():
+        return click.prompt(label, hide_input=True).strip()
+    return sys.stdin.read().strip()
+
+
+@profile_group.command("list")
+@pass_ctx
+def profile_list(ctx: _Ctx) -> None:
+    """List the connection profiles defined in the config file."""
+    raw = ctx.cfg.get("profiles")
+    raw = raw if isinstance(raw, dict) else {}
+    default = ctx.cfg.get("default-profile")
+    records = [
+        {
+            "name": name,
+            "url": entry.get("url", ""),
+            "username": entry.get("username", ""),
+            "token_set": bool(entry.get("token")),
+            "default": name == default,
+        }
+        for name, entry in sorted(raw.items())
+        if isinstance(entry, dict)
+    ]
+
+    def token_cell(r: dict) -> str:
+        return "***" if r["token_set"] else ""
+
+    def default_cell(r: dict) -> str:
+        return "✓" if r["default"] else ""
+
+    columns = [
+        Column("name", "Name"),
+        Column("url", "URL"),
+        Column("username", "Username"),
+        Column(
+            "token_set",
+            "Token",
+            table=lambda r, _i: token_cell(r) or "—",
+            plain=token_cell,
+        ),
+        Column(
+            "default",
+            "Default",
+            table=lambda r, _i: default_cell(r),
+            plain=default_cell,
+        ),
+    ]
+    _emit(
+        ctx,
+        records,
+        columns,
+        header="📇 The connection ledger.",
+        empty=(
+            "🗂️ The ledger holds no profiles at present. "
+            "'jeeves profile add' will remedy that in short order."
+        ),
+    )
+
+
+@profile_group.command("add")
+@click.argument("name")
+@click.option("--url", default=None, metavar="URL", help="Jenkins server URL.")
+@click.option("--username", default=None, metavar="USER", help="Jenkins username.")
+@click.option(
+    "--token",
+    default=None,
+    metavar="TOKEN",
+    help="Jenkins API token; pass '-' to read it from a hidden prompt or stdin.",
+)
+@click.option(
+    "--default",
+    "make_default",
+    is_flag=True,
+    default=False,
+    help="Also make this profile the default-profile.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Update an existing profile (merges only the fields given).",
+)
+@pass_ctx
+def profile_add(
+    ctx: _Ctx,
+    name: str,
+    url: str | None,
+    username: str | None,
+    token: str | None,
+    make_default: bool,
+    force: bool,
+) -> None:
+    """Add a connection profile (or update one with --force)."""
+    if token == "-":
+        token = _read_secret("Token")
+    try:
+        path = add_profile(
+            name,
+            url=url,
+            username=username,
+            token=token,
+            make_default=make_default,
+            force=force,
+            config_path=ctx.config_path,
+        )
+    except ValueError as exc:
+        if "already exists" in str(exc):
+            _butler_fail(
+                f"Profile '{name}' is already on the books, sir. "
+                "Add --force if I should amend it.",
+                ctx.colour,
+            )
+        _butler_bother(exc, ctx.colour)
+    except OSError as exc:
+        _butler_bother(exc, ctx.colour)
+    suffix = " as the default" if make_default else ""
+    click.echo(f"📇 Very good. Profile '{name}' is entered into the ledger{suffix}.")
+    click.echo(f"Config file: {path}", err=True)
+
+
+@profile_group.command("remove")
+@click.argument("name", shell_complete=_complete_profile)
+@pass_ctx
+def profile_remove(ctx: _Ctx, name: str) -> None:
+    """Remove a connection profile from the config file."""
+    try:
+        _path, cleared = remove_profile(name, config_path=ctx.config_path)
+    except UnknownProfileError:
+        available = list_profiles(ctx.cfg)
+        detail = (
+            f"The profiles at my disposal are: {', '.join(available)}."
+            if available
+            else "No profiles are configured at all."
+        )
+        _butler_fail(
+            f"I regret I know of no profile called '{name}', sir. {detail}",
+            ctx.colour,
+        )
+    except (ValueError, OSError) as exc:
+        _butler_bother(exc, ctx.colour)
+    if cleared:
+        click.echo(
+            f"🗑️ Profile '{name}' has been struck from the ledger, "
+            "and the default cleared with it."
+        )
+    else:
+        click.echo(f"🗑️ Profile '{name}' has been struck from the ledger.")
+
+
+@profile_group.command("use")
+@click.argument("name", required=False, shell_complete=_complete_profile)
+@click.option(
+    "--clear",
+    is_flag=True,
+    default=False,
+    help="Unset default-profile (revert to the flat jenkins-* keys).",
+)
+@pass_ctx
+def profile_use(ctx: _Ctx, name: str | None, clear: bool) -> None:
+    """Set (or with --clear unset) the default connection profile."""
+    if clear == bool(name):
+        _butler_fail(
+            "Kindly name a profile or pass --clear, sir — one or the other.",
+            ctx.colour,
+        )
+    try:
+        set_default_profile(None if clear else name, config_path=ctx.config_path)
+    except UnknownProfileError:
+        available = list_profiles(ctx.cfg)
+        detail = (
+            f"The profiles at my disposal are: {', '.join(available)}."
+            if available
+            else "No profiles are configured at all."
+        )
+        _butler_fail(
+            f"I regret I know of no profile called '{name}', sir. {detail}",
+            ctx.colour,
+        )
+    except (ValueError, OSError) as exc:
+        _butler_bother(exc, ctx.colour)
+    if clear:
+        click.echo(
+            "📌 Very good. The default profile is cleared; "
+            "the household reverts to the flat keys."
+        )
+    else:
+        click.echo(f"📌 Very good. '{name}' shall be the default henceforth.")
 
 
 # ── job list ─────────────────────────────────────────────────────────────────

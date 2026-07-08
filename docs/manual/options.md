@@ -59,6 +59,31 @@ An unknown profile name is refused up front with the list of configured
 profiles. Profile names needing dots or spaces must be TOML-quoted:
 `[profiles."my.prod"]`.
 
+### Managing profiles (`jeeves profile ...`)
+
+Profiles can be maintained without hand-editing the config file:
+
+```bash
+jeeves profile list                                    # table; tokens masked
+jeeves profile add prod --url https://ci.prod --username me --token - --default
+jeeves profile add prod --token - --force              # rotate just the token
+jeeves profile use staging                             # set default-profile
+jeeves profile use --clear                             # back to the flat keys
+jeeves profile remove prod                             # also clears a dangling default
+```
+
+Notes:
+
+- `--token -` reads the token from a hidden prompt (or stdin when piped),
+  keeping it out of shell history.
+- `add` refuses to touch an existing profile unless `--force`, which merges
+  only the fields you pass — omitted fields are kept.
+- Edits go to the file `--config` names, else the first existing config
+  search path, else `~/.config/jeeves/config.toml` (created with `0600`
+  permissions). Writes are atomic and preserve comments.
+- The `profile` commands work even when `default-profile` points at a
+  missing profile, so a broken config can always be repaired.
+
 ## Display options
 
 ### `--theme`

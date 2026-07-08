@@ -2,9 +2,14 @@ import pytest
 
 from jeeves.config import (
     _DEFAULT_CONFIG_CONTENT,
+    UnknownProfileError,
+    add_profile,
     get_jenkins_config,
     list_profiles,
     load_config,
+    remove_profile,
+    resolve_config_write_path,
+    set_default_profile,
     show_config,
     write_default_config,
 )
@@ -183,3 +188,145 @@ def test_show_config_renders_profiles_and_masks_tokens():
 def test_show_config_profiles_not_a_table_falls_through():
     output = show_config({"profiles": "oops"})
     assert "profiles = 'oops'" in output
+
+
+# ── profile writing ───────────────────────────────────────────────────────────
+
+
+def test_add_profile_creates_file_and_parent_dirs(tmp_path):
+    target = tmp_path / "deep" / "nested" / "config.toml"
+    path = add_profile("prod", url="http://prod", config_path=str(target))
+    assert path == target.resolve()
+    cfg = load_config(str(target))
+    assert cfg["profiles"]["prod"]["url"] == "http://prod"
+
+
+def test_add_profile_new_file_is_private(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", token="secret", config_path=str(target))
+    assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def test_add_profile_preserves_comments_and_root_key_placement(tmp_path):
+    target = tmp_path / "config.toml"
+    target.write_text(
+        "# my precious comment\n"
+        'theme = "rainbow"\n\n[profiles.prod]\nurl = "http://prod"\n'
+    )
+    add_profile(
+        "staging", url="http://staging", make_default=True, config_path=str(target)
+    )
+    text = target.read_text()
+    assert "# my precious comment" in text
+    cfg = load_config(str(target))
+    # default-profile must land at the document root, not inside a table
+    assert cfg["default-profile"] == "staging"
+    assert cfg["profiles"]["prod"]["url"] == "http://prod"
+    assert cfg["profiles"]["staging"]["url"] == "http://staging"
+
+
+def test_add_profile_existing_without_force_raises(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", config_path=str(target))
+    with pytest.raises(ValueError, match="already exists"):
+        add_profile("prod", url="http://other", config_path=str(target))
+
+
+def test_add_profile_force_merges_fields(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile(
+        "prod",
+        url="http://prod",
+        username="steve",
+        token="old",
+        config_path=str(target),
+    )
+    add_profile("prod", token="new", force=True, config_path=str(target))
+    cfg = load_config(str(target))
+    # token rotated; url and username survive the update
+    assert cfg["profiles"]["prod"] == {
+        "url": "http://prod",
+        "username": "steve",
+        "token": "new",
+    }
+
+
+def test_add_profile_bad_toml_raises_value_error(tmp_path):
+    target = tmp_path / "config.toml"
+    target.write_text("not = [valid toml")
+    with pytest.raises(ValueError, match="Config parse error"):
+        add_profile("prod", url="http://prod", config_path=str(target))
+
+
+def test_remove_profile_deletes_and_clears_dangling_default(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", make_default=True, config_path=str(target))
+    add_profile("staging", url="http://staging", config_path=str(target))
+    _path, cleared = remove_profile("prod", config_path=str(target))
+    assert cleared is True
+    cfg = load_config(str(target))
+    assert "default-profile" not in cfg
+    assert list(cfg["profiles"]) == ["staging"]
+    _path, cleared = remove_profile("staging", config_path=str(target))
+    assert cleared is False
+
+
+def test_remove_profile_unknown_raises(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", config_path=str(target))
+    with pytest.raises(UnknownProfileError, match="Unknown profile"):
+        remove_profile("bogus", config_path=str(target))
+
+
+def test_remove_profile_parse_error_is_not_unknown_profile(tmp_path):
+    # a corrupt config must surface as a parse error, not "unknown profile"
+    target = tmp_path / "config.toml"
+    target.write_text("not = [valid toml")
+    with pytest.raises(ValueError, match="Config parse error") as excinfo:
+        remove_profile("prod", config_path=str(target))
+    assert not isinstance(excinfo.value, UnknownProfileError)
+
+
+def test_set_default_profile_sets_and_clears(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", config_path=str(target))
+    set_default_profile("prod", config_path=str(target))
+    assert load_config(str(target))["default-profile"] == "prod"
+    set_default_profile(None, config_path=str(target))
+    assert "default-profile" not in load_config(str(target))
+
+
+def test_set_default_profile_unknown_raises(tmp_path):
+    target = tmp_path / "config.toml"
+    add_profile("prod", url="http://prod", config_path=str(target))
+    with pytest.raises(ValueError, match="Unknown profile"):
+        set_default_profile("bogus", config_path=str(target))
+
+
+def test_resolve_config_write_path_explicit_wins(tmp_path):
+    target = tmp_path / "mine.toml"
+    assert resolve_config_write_path(str(target)) == target.resolve()
+
+
+def test_resolve_config_write_path_prefers_existing_then_xdg(tmp_path, monkeypatch):
+    from jeeves import config as cfg_mod
+
+    existing = tmp_path / "found.toml"
+    missing = tmp_path / "missing.toml"
+    monkeypatch.setattr(cfg_mod, "get_config_paths", lambda: [missing, existing])
+    monkeypatch.setattr(cfg_mod, "get_config_dir", lambda: tmp_path / "xdg")
+    # nothing exists yet → XDG default
+    expected = (tmp_path / "xdg" / "config.toml").resolve()
+    assert resolve_config_write_path(None) == expected
+    existing.write_text("")
+    assert resolve_config_write_path(None) == existing.resolve()
+
+
+def test_resolve_config_write_path_follows_symlink(tmp_path):
+    real = tmp_path / "real.toml"
+    real.write_text('theme = "rainbow"\n')
+    link = tmp_path / "link.toml"
+    link.symlink_to(real)
+    add_profile("prod", url="http://prod", config_path=str(link))
+    assert link.is_symlink()  # the link survives; the real file was edited
+    assert load_config(str(real))["profiles"]["prod"]["url"] == "http://prod"

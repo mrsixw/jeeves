@@ -1729,6 +1729,226 @@ def test_complete_profile_bad_config_returns_empty(tmp_path):
     assert cli_mod._complete_profile(ctx, None, "") == []
 
 
+# ── profile management commands ───────────────────────────────────────────────
+
+
+def test_profile_list_table_masks_and_marks_default(tmp_path):
+    cfg = _profiles_config(tmp_path, head='default-profile = "prod"\n\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "list"
+    )
+    assert result.exit_code == 0
+    assert "ledger" in result.stderr
+    assert "prod" in result.stdout
+    assert "staging" in result.stdout
+    assert "prod-secret" not in result.output
+    assert "***" in result.stdout
+    assert "✓" in result.stdout
+
+
+def test_profile_list_json_never_leaks_tokens(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-update-check", "--format", "json", "--config", cfg, "profile", "list"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    by_name = {r["name"]: r for r in data}
+    assert by_name["prod"]["token_set"] is True
+    assert by_name["staging"]["token_set"] is False
+    assert "prod-secret" not in result.stdout
+
+
+def test_profile_list_empty_shows_butler_message(tmp_path):
+    empty = tmp_path / "config.toml"
+    empty.write_text('theme = "default"\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", str(empty), "profile", "list"
+    )
+    assert result.exit_code == 0
+    assert "🗂️ The ledger" in result.stderr
+
+
+def test_profile_add_creates_profile(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        str(cfg_file),
+        "profile",
+        "add",
+        "prod",
+        "--url",
+        "http://prod.example.com",
+        "--username",
+        "steve",
+        "--token",
+        "abc",
+        "--default",
+    )
+    assert result.exit_code == 0
+    assert "📇 Very good. Profile 'prod'" in result.stdout
+    assert "as the default" in result.stdout
+    from jeeves.config import load_config
+
+    cfg = load_config(str(cfg_file))
+    assert cfg["profiles"]["prod"]["url"] == "http://prod.example.com"
+    assert cfg["default-profile"] == "prod"
+
+
+def test_profile_add_existing_needs_force(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "profile",
+        "add",
+        "prod",
+        "--url",
+        "http://elsewhere",
+    )
+    assert result.exit_code == 1
+    assert "already on the books" in result.stderr
+    assert "--force" in result.stderr
+
+
+def test_profile_add_force_updates(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "profile",
+        "add",
+        "prod",
+        "--token",
+        "rotated",
+        "--force",
+    )
+    assert result.exit_code == 0
+    from jeeves.config import load_config
+
+    loaded = load_config(cfg)
+    assert loaded["profiles"]["prod"]["token"] == "rotated"
+    assert loaded["profiles"]["prod"]["url"] == "http://prod.example.com"
+
+
+def test_profile_add_token_dash_reads_stdin(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        str(cfg_file),
+        "profile",
+        "add",
+        "prod",
+        "--url",
+        "http://prod",
+        "--token",
+        "-",
+        input="hush-hush\n",
+    )
+    assert result.exit_code == 0
+    from jeeves.config import load_config
+
+    assert load_config(str(cfg_file))["profiles"]["prod"]["token"] == "hush-hush"
+    assert "hush-hush" not in result.stdout
+
+
+def test_profile_remove_clears_dangling_default(tmp_path):
+    cfg = _profiles_config(tmp_path, head='default-profile = "prod"\n\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "remove", "prod"
+    )
+    assert result.exit_code == 0
+    assert "🗑️ Profile 'prod'" in result.stdout
+    assert "default cleared" in result.stdout
+    from jeeves.config import load_config
+
+    loaded = load_config(cfg)
+    assert "default-profile" not in loaded
+    assert "prod" not in loaded["profiles"]
+
+
+def test_profile_remove_unknown_lists_profiles(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--config",
+        cfg,
+        "profile",
+        "remove",
+        "bogus",
+    )
+    assert result.exit_code == 1
+    assert "🎩" in result.stderr
+    assert "prod, staging" in result.stderr
+
+
+def test_profile_use_sets_default(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "use", "staging"
+    )
+    assert result.exit_code == 0
+    assert "'staging' shall be the default" in result.stdout
+    from jeeves.config import load_config
+
+    assert load_config(cfg)["default-profile"] == "staging"
+
+
+def test_profile_use_clear_unsets_default(tmp_path):
+    cfg = _profiles_config(tmp_path, head='default-profile = "prod"\n\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "use", "--clear"
+    )
+    assert result.exit_code == 0
+    assert "reverts to the flat keys" in result.stdout
+    from jeeves.config import load_config
+
+    assert "default-profile" not in load_config(cfg)
+
+
+def test_profile_use_unknown_errors(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "use", "bogus"
+    )
+    assert result.exit_code == 1
+    assert "no profile called 'bogus'" in result.stderr
+
+
+def test_profile_use_requires_name_or_clear(tmp_path):
+    cfg = _profiles_config(tmp_path)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", cfg, "profile", "use"
+    )
+    assert result.exit_code == 1
+    assert "one or the other" in result.stderr
+
+
+def test_profile_commands_survive_broken_default_profile(tmp_path):
+    # a dangling default-profile must not brick the repair commands…
+    broken = tmp_path / "config.toml"
+    broken.write_text('default-profile = "gone"\n')
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", str(broken), "profile", "list"
+    )
+    assert result.exit_code == 0
+    # …while other commands still refuse it up front
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--config", str(broken), "status"
+    )
+    assert result.exit_code == 1
+    assert "gone" in result.stderr
+
+
 # ── deprecated aliases ────────────────────────────────────────────────────────
 
 _NOTICE = "has moved to"
