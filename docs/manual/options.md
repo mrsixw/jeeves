@@ -154,7 +154,7 @@ Structured formats (`json`, `ndjson`) emit semantic values, never the
 decorative emoji. The JSON keys per command:
 
 - **job list**: `name`, `type`, `color`, `status`, `health`, `url`
-- **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
+- **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms; with `--address`, adds `address` — the agent's launcher host/IP, or `null` when unavailable)
 - **queue**: `name`, `reason`, `stuck`, `url`
 
 ### `--template`

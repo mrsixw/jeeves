@@ -1662,21 +1662,59 @@ def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     click.echo(text, nl=False)
 
 
+_FOLLOW_POLL_INTERVAL = 1.0
+
+
+def _follow_impl(ctx: _Ctx, job: str, build_id: str) -> None:
+    client = _make_client(ctx)
+    start = 0
+    try:
+        while True:
+            try:
+                text, start, more_data = client.progressive_log(
+                    job, build=build_id, start=start
+                )
+            except JenkinsError as exc:
+                _butler_error(str(exc), ctx.colour)
+                sys.exit(1)
+            if text:
+                click.echo(text, nl=False)
+            if not more_data:
+                break
+            time.sleep(_FOLLOW_POLL_INTERVAL)
+    except KeyboardInterrupt:
+        click.echo(
+            "\n🎩 Very good — I shall cease following.", err=True, color=ctx.colour
+        )
+        sys.exit(130)
+
+
 @build.command("log")
 @click.argument("job")
 @click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Follow a running build's log live (tail -f style) until it completes.",
+)
 @pass_ctx
 def build_log(
     ctx: _Ctx,
     job: str,
     build_id: str,
+    follow: bool,
 ) -> None:
     """Show the console log for a build.
 
     JOB is the job name; BUILD is a build number or permalink
     (default: lastBuild).
     """
-    _log_impl(ctx, job, build_id)
+    if follow:
+        _follow_impl(ctx, job, build_id)
+    else:
+        _log_impl(ctx, job, build_id)
 
 
 # ── queue ───────────────────────────────────────────────────────────────────
