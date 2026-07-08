@@ -18,7 +18,13 @@ import click
 from tabulate import tabulate
 
 from . import render as _render
-from .config import get_jenkins_config, load_config, show_config, write_default_config
+from .config import (
+    get_jenkins_config,
+    list_profiles,
+    load_config,
+    show_config,
+    write_default_config,
+)
 from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
@@ -42,10 +48,26 @@ class _Ctx:
     url: str | None = None
     user: str | None = None
     token: str | None = None
+    profile: str | None = None
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
 pass_ctx = click.make_pass_decorator(_Ctx)
+
+
+def _complete_profile(ctx, param, incomplete) -> list:
+    """Shell-complete --profile values from the config's profile names."""
+    from click.shell_completion import CompletionItem
+
+    try:
+        cfg = load_config(ctx.params.get("config_path"))
+    except (ValueError, OSError):
+        return []
+    return [
+        CompletionItem(name)
+        for name in list_profiles(cfg)
+        if name.startswith(incomplete)
+    ]
 
 
 def _isatty() -> bool:
@@ -102,7 +124,8 @@ def _butler_error(msg: str, colour: bool) -> None:
 
 
 def _make_client(ctx: _Ctx) -> JenkinsClient:
-    cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg)
+    # main() validated ctx.profile against the config before building _Ctx.
+    cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg, ctx.profile)
     return JenkinsClient(
         ctx.url or cfg_url, ctx.user or cfg_user, ctx.token or cfg_token
     )
@@ -141,6 +164,14 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     metavar="TOKEN",
     envvar="JEEVES_TOKEN",
     help="Jenkins API token (overrides config).",
+)
+@click.option(
+    "--profile",
+    default=None,
+    metavar="NAME",
+    envvar="JEEVES_PROFILE",
+    shell_complete=_complete_profile,
+    help="Named connection profile from config [profiles.NAME] (overrides flat keys).",
 )
 # ── Shell completions ──────────────────────────────────────────────────────
 @click.option(
@@ -243,6 +274,7 @@ def main(
     url,
     user,
     token,
+    profile,
     completion_shell,
     config_path,
     do_show_config,
@@ -294,6 +326,30 @@ def main(
         click.echo(show_config(cfg, config_path))
         sys.exit(0)
 
+    # ── Profile resolution ──────────────────────────────────────────────────
+    profile = profile or cfg.get("default-profile") or None
+    if profile is not None:
+        available = list_profiles(cfg)
+        if profile not in available:
+            if available:
+                detail = f"The profiles at my disposal are: {', '.join(available)}."
+            else:
+                detail = "No profiles are configured at all."
+            text = f"I regret I know of no profile called '{profile}', sir. {detail}"
+            click.echo(click.style(f"🎩 {text}", fg="red"), err=True, color=colour)
+            sys.exit(1)
+        # A profile's fields beat env vars; env-sourced --url/--user/--token
+        # values would otherwise override them at flag level. Genuine
+        # command-line flags keep their per-field override.
+        from click.core import ParameterSource
+
+        if ctx.get_parameter_source("url") == ParameterSource.ENVIRONMENT:
+            url = None
+        if ctx.get_parameter_source("user") == ParameterSource.ENVIRONMENT:
+            user = None
+        if ctx.get_parameter_source("token") == ParameterSource.ENVIRONMENT:
+            token = None
+
     # ── Resolve display options ────────────────────────────────────────────
     theme_name = theme if theme is not None else cfg.get("theme", "default")
     seasonal_colours = (
@@ -325,6 +381,7 @@ def main(
         url=url,
         user=user,
         token=token,
+        profile=profile,
     )
     ctx.ensure_object(_Ctx)
 
