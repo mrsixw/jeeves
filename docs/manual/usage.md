@@ -70,6 +70,28 @@ jeeves --show-config       # print resolved config
 jeeves --config my.toml    # use a custom config file
 ```
 
+## Connection profiles
+
+Target multiple Jenkins servers from one config file. See
+[docs/manual/options.md](options.md) for the `[profiles.NAME]` schema and
+precedence rules.
+
+```bash
+jeeves --profile prod status                 # use a named profile for one command
+JEEVES_PROFILE=staging jeeves job list       # env alternative to the flag
+```
+
+## Managing profiles
+
+```bash
+jeeves profile list                             # table; tokens masked
+jeeves profile add prod --url https://ci.prod --username me --token -
+jeeves profile add prod --token - --force       # rotate just the token
+jeeves profile use prod                         # set default-profile
+jeeves profile use --clear                      # back to the flat keys
+jeeves profile remove staging                   # delete a profile
+```
+
 ## Shell completions
 
 ```bash
