@@ -1515,6 +1515,114 @@ def build_show(
     )
 
 
+# ── build blame ──────────────────────────────────────────────────────────────
+
+
+def _change_records(info: dict) -> list[dict]:
+    """Flatten a build's SCM changes into semantic change records.
+
+    Pipeline builds carry ``changeSets[]``; freestyle builds a single
+    ``changeSet`` object. Each record is the JSON contract for one commit:
+    ``{commit, author, author_url, email, timestamp, message}``.
+    """
+    change_sets = info.get("changeSets")
+    if change_sets is None:
+        single = info.get("changeSet")
+        change_sets = [single] if isinstance(single, dict) else []
+    records = []
+    for cs in change_sets:
+        for item in cs.get("items", []):
+            author = item.get("author") or {}
+            records.append(
+                {
+                    "commit": item.get("commitId"),
+                    "author": author.get("fullName"),
+                    "author_url": author.get("absoluteUrl"),
+                    "email": item.get("authorEmail"),
+                    "timestamp": item.get("timestamp"),
+                    "message": item.get("msg") or "",
+                }
+            )
+    return records
+
+
+def _culprit_names(info: dict) -> list[str]:
+    """Names of the users Jenkins holds responsible for a build's changes."""
+    return [c["fullName"] for c in info.get("culprits", []) if c.get("fullName")]
+
+
+def _blame_columns(ctx: _Ctx) -> list[Column]:
+    def commit_table(r: dict, i: int) -> str:
+        text = (r["commit"] or "")[:7] or "—"
+        if ctx.colour and ctx.seasonal_colours:
+            text = apply_seasonal_colour(text, i, calendar=ctx.seasonal_calendar)
+        return text
+
+    def author_table(r: dict, _i: int) -> str:
+        name = r["author"] or "—"
+        if r["author_url"]:
+            name = _hyperlink(name, r["author_url"], ctx.colour)
+        return name
+
+    return [
+        Column("commit", "Commit", table=commit_table),
+        Column(
+            "author", "Author", table=author_table, plain=lambda r: r["author"] or ""
+        ),
+        Column(
+            "timestamp",
+            "When",
+            table=lambda r, _i: _relative_time(r["timestamp"]),
+            plain=lambda r: _relative_time(r["timestamp"]),
+        ),
+        Column("message", "Message"),
+    ]
+
+
+@build.command("blame")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@pass_ctx
+def build_blame(ctx: _Ctx, job: str, build_id: str) -> None:
+    """Show who changed what in a build (culprits and SCM changes).
+
+    JOB is the job name; BUILD is a build number or permalink
+    (default: lastBuild — try lastFailedBuild for the latest breakage).
+    """
+    client = _make_client(ctx)
+    try:
+        info = client.changes(job, build_id)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    if info is None:
+        _emit(
+            ctx,
+            [],
+            _blame_columns(ctx),
+            header="",
+            empty=f"🤷 I could find no build '{build_id}' for '{job}'.",
+        )
+        return
+
+    records = _change_records(info)
+    number = info.get("number")
+    label = f"#{number}" if number is not None else build_id
+    culprits = _culprit_names(info)
+    suffix = f" Persons of interest: {', '.join(culprits)}." if culprits else ""
+    _emit(
+        ctx,
+        records,
+        _blame_columns(ctx),
+        header=f"🕵️ The changes aboard build {label} of '{job}'.{suffix}",
+        empty=(
+            f"🧾 Not a single change aboard build {label} of '{job}'. The ledger "
+            f"is quite blank — an automated affair, one presumes.{suffix}"
+        ),
+    )
+
+
 # ── params ───────────────────────────────────────────────────────────────────
 
 

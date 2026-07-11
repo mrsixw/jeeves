@@ -204,6 +204,48 @@ def test_build_info_other_error_raises(client: JenkinsClient) -> None:
             client.build_info("my-pipeline")
 
 
+# ── changes ─────────────────────────────────────────────────────────────────
+
+
+def test_changes_returns_data_with_tree(client: JenkinsClient) -> None:
+    payload = {
+        "number": 42,
+        "culprits": [{"fullName": "Bertie Wooster"}],
+        "changeSets": [{"items": [{"commitId": "abc123", "msg": "fix the boiler"}]}],
+    }
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/lastBuild/api/json", json=payload)
+        data = client.changes("my-pipeline")
+    assert data is not None
+    assert data["culprits"][0]["fullName"] == "Bertie Wooster"
+    # the tree selector pulls only blame-relevant fields, for both job types
+    tree = m.last_request.qs["tree"][0]
+    assert "culprits[" in tree
+    assert "changesets[" in tree.lower()
+    assert "changeset[" in tree.lower()
+    assert "author[fullname,absoluteurl]" in tree.lower()
+
+
+def test_changes_specific_build_and_nested_job(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/team/job/deploy/7/api/json", json={"number": 7})
+        data = client.changes("team/deploy", 7)
+    assert data["number"] == 7
+
+
+def test_changes_404_returns_none(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/lastFailedBuild/api/json", status_code=404)
+        assert client.changes("my-pipeline", "lastFailedBuild") is None
+
+
+def test_changes_other_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/job/my-pipeline/lastBuild/api/json", status_code=500)
+        with pytest.raises(JenkinsError, match="500"):
+            client.changes("my-pipeline")
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 

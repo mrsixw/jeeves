@@ -4,7 +4,7 @@ from urllib.parse import parse_qs
 
 import requests
 from click.testing import CliRunner
-from conftest import api, url
+from conftest import JENKINS_URL, api, url
 
 from jeeves import cli as cli_mod
 from jeeves.cli import _hyperlink, main
@@ -1037,6 +1037,125 @@ def test_builds_show_exposes_params_and_causes_json(jenkins):
     assert data[0]["params"] == {"CHANGE_ID": "12345"}
     assert data[0]["causes"][0]["upstreamProject"] == "foo"
     assert data[0]["causes"][0]["upstreamBuild"] == 3
+
+
+# ── build blame ──────────────────────────────────────────────────────────────
+
+_BLAME_PIPELINE_BUILD = {
+    "number": 12,
+    "culprits": [
+        {"fullName": "Bertie Wooster", "absoluteUrl": f"{JENKINS_URL}/user/bertie/"}
+    ],
+    "changeSets": [
+        {
+            "items": [
+                {
+                    "commitId": "deadbeefcafe1234",
+                    "msg": "fix the boiler",
+                    "timestamp": 1700000000000,
+                    "authorEmail": "bertie@drones.example",
+                    "author": {
+                        "fullName": "Bertie Wooster",
+                        "absoluteUrl": f"{JENKINS_URL}/user/bertie/",
+                    },
+                }
+            ]
+        }
+    ],
+}
+
+
+def test_build_blame_lists_changes_and_culprits(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "deadbee" in result.stdout  # abbreviated commit id
+    assert "deadbeefcafe1234" not in result.stdout
+    assert "Bertie Wooster" in result.stdout
+    assert "fix the boiler" in result.stdout
+    assert "build #12 of 'deploy'" in result.stderr
+    assert "Persons of interest: Bertie Wooster" in result.stderr
+
+
+def test_build_blame_requests_blame_tree(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    tree = jenkins.last_request.qs["tree"][0].lower()
+    assert "culprits[" in tree
+    assert "changesets[" in tree
+
+
+def test_build_blame_freestyle_changeset_shape(jenkins):
+    _build_info_http(
+        jenkins,
+        {
+            "5": {
+                "number": 5,
+                "culprits": [],
+                "changeSet": {
+                    "items": [
+                        {
+                            "commitId": "0123abcd",
+                            "msg": "polish the silver",
+                            "author": {"fullName": "Jeeves"},
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "blame", "deploy", "5"
+    )
+    assert result.exit_code == 0
+    assert "polish the silver" in result.stdout
+    assert "Jeeves" in result.stdout
+    assert "Persons of interest" not in result.stderr
+
+
+def test_build_blame_empty_changeset(jenkins):
+    _build_info_http(
+        jenkins, {"lastBuild": {"number": 3, "culprits": [], "changeSets": []}}
+    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "Not a single change aboard build #3" in result.stderr
+
+
+def test_build_blame_no_scm_build(jenkins):
+    # A job with no SCM at all: neither changeSet nor changeSets in the JSON.
+    _build_info_http(jenkins, {"lastBuild": {"number": 4}})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "Not a single change aboard build #4" in result.stderr
+
+
+def test_build_blame_missing_build(jenkins):
+    _build_info_http(jenkins, {"lastFailedBuild": None})
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "blame",
+        "deploy",
+        "lastFailedBuild",
+    )
+    assert result.exit_code == 0
+    assert "could find no build 'lastFailedBuild'" in result.stderr
+
+
+def test_build_blame_json_exposes_semantic_records(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke(
+        "--no-update-check", "--format", "json", "build", "blame", "deploy"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["commit"] == "deadbeefcafe1234"  # full id in structured output
+    assert data[0]["author"] == "Bertie Wooster"
+    assert data[0]["email"] == "bertie@drones.example"
+    assert data[0]["message"] == "fix the boiler"
 
 
 def test_builds_list_param_filter(jenkins):
