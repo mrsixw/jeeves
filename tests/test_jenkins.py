@@ -295,6 +295,61 @@ def test_log_nested_job(client: JenkinsClient) -> None:
     assert text == "ok"
 
 
+# ── progressive_log ──────────────────────────────────────────────────────────
+
+
+def test_progressive_log_returns_chunk_offset_and_more_data(
+    client: JenkinsClient,
+) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/logText/progressiveText",
+            text="line one\n",
+            headers={"X-Text-Size": "9", "X-More-Data": "true"},
+        )
+        text, start, more = client.progressive_log("my-pipeline")
+    assert text == "line one\n"
+    assert start == 9
+    assert more is True
+    assert m.last_request.qs == {"start": ["0"]}
+
+
+def test_progressive_log_no_more_data_when_build_finished(
+    client: JenkinsClient,
+) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/logText/progressiveText",
+            text="",
+            headers={"X-Text-Size": "42"},
+        )
+        text, start, more = client.progressive_log("my-pipeline", start=42)
+    assert text == ""
+    assert start == 42
+    assert more is False
+
+
+def test_progressive_log_passes_start_offset(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/logText/progressiveText",
+            text="",
+            headers={"X-Text-Size": "100"},
+        )
+        client.progressive_log("my-pipeline", start=57)
+    assert m.last_request.qs == {"start": ["57"]}
+
+
+def test_progressive_log_http_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/logText/progressiveText",
+            status_code=404,
+        )
+        with pytest.raises(JenkinsError, match="404"):
+            client.progressive_log("my-pipeline")
+
+
 # ── queue ───────────────────────────────────────────────────────────────────
 
 
@@ -376,6 +431,23 @@ def test_nodes_depth_passes_query_param(client: JenkinsClient) -> None:
         m.get(f"{BASE}/computer/api/json", json=payload)
         client.nodes(depth=1)
     assert m.last_request.qs == {"depth": ["1"]}
+
+
+# ── node_config ──────────────────────────────────────────────────────────────
+
+
+def test_node_config_returns_xml(client: JenkinsClient) -> None:
+    xml = "<slave><launcher><host>10.0.4.17</host></launcher></slave>"
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/computer/agent1/config.xml", text=xml)
+        assert client.node_config("agent1") == xml
+
+
+def test_node_config_http_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/computer/agent1/config.xml", status_code=403)
+        with pytest.raises(JenkinsError, match="403"):
+            client.node_config("agent1")
 
 
 # ── auth ────────────────────────────────────────────────────────────────────
