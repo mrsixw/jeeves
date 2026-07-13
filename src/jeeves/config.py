@@ -1,11 +1,17 @@
+import contextlib
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+import tomlkit
+import tomlkit.exceptions
 
 from .xdg import get_config_dir, get_config_paths
 
@@ -61,6 +67,27 @@ _DEFAULT_CONFIG_CONTENT = """\
 # Jenkins API token (Jenkins → Your Name → Configure → API Token).
 # Equivalent to: --token <token>  |  env: JEEVES_TOKEN
 # jenkins-token = ""
+
+# ----- Connection profiles -----
+
+# Named connection profiles for multiple Jenkins servers.
+# Select one with --profile <name> or env: JEEVES_PROFILE, or set a
+# default below. When a profile is active the flat jenkins-* keys above
+# are ignored; missing profile fields fall back to the JEEVES_URL /
+# JEEVES_USER / JEEVES_TOKEN environment variables.
+
+# Profile to use when --profile / JEEVES_PROFILE is not given.
+# default-profile = "prod"
+
+# [profiles.prod]
+# url = "https://jenkins.prod.example.com"
+# username = ""
+# token = ""
+
+# [profiles.staging]
+# url = "https://jenkins.staging.example.com"
+# username = ""
+# token = ""
 """
 
 
@@ -96,14 +123,164 @@ def write_default_config() -> Path:
     return config_path
 
 
-def get_jenkins_config(cfg: dict) -> tuple[str, str, str]:
-    """Extract Jenkins connection settings from config, falling back to env vars."""
+class UnknownProfileError(ValueError):
+    """Raised when a named connection profile does not exist in the config."""
+
+
+def resolve_config_write_path(config_path: str | None = None) -> Path:
+    """The config file profile edits apply to (may not exist yet).
+
+    Mirrors the read-side rule: an explicit path wins, then the first
+    existing search path, then the XDG default. Symlinks are resolved so
+    atomic replacement edits the real file rather than clobbering a link.
+    """
+    if config_path:
+        return Path(config_path).resolve()
+    for path in get_config_paths():
+        if path.exists():
+            return path.resolve()
+    return (get_config_dir() / "config.toml").resolve()
+
+
+def _load_toml_document(path: Path) -> tomlkit.TOMLDocument:
+    """Parse *path* for editing (comment-preserving); empty doc if absent."""
+    if not path.exists():
+        return tomlkit.document()
+    try:
+        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    except tomlkit.exceptions.TOMLKitError as exc:
+        raise ValueError(f"Config parse error in {path}: {exc}") from exc
+
+
+def _write_toml_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
+    """Atomically write *doc* to *path* (temp file + rename).
+
+    New files get 0600 — the config may hold API tokens.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config-", suffix=".tmp")
+    replaced = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(tomlkit.dumps(doc))
+        if path.exists():
+            shutil.copymode(path, tmp)
+        else:
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        replaced = True
+    finally:
+        if not replaced:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+
+
+def add_profile(
+    name: str,
+    url: str | None = None,
+    username: str | None = None,
+    token: str | None = None,
+    make_default: bool = False,
+    force: bool = False,
+    config_path: str | None = None,
+) -> Path:
+    """Create ``[profiles.<name>]`` in the config file; returns the path written.
+
+    An existing profile is only touched with ``force``, which merges the
+    provided fields into the entry (omitted fields are kept).
+    """
+    path = resolve_config_write_path(config_path)
+    doc = _load_toml_document(path)
+    if not isinstance(doc.get("profiles"), dict):
+        doc["profiles"] = tomlkit.table(is_super_table=True)
+    profiles = doc["profiles"]
+    exists = name in profiles
+    if exists and not force:
+        raise ValueError(f"Profile {name!r} already exists")
+    if not (exists and isinstance(profiles[name], dict)):
+        profiles[name] = tomlkit.table()
+    entry = profiles[name]
+    for key, value in (("url", url), ("username", username), ("token", token)):
+        if value is not None:
+            entry[key] = value
+    if make_default:
+        doc["default-profile"] = name
+    _write_toml_document(path, doc)
+    return path
+
+
+def remove_profile(name: str, config_path: str | None = None) -> tuple[Path, bool]:
+    """Delete ``[profiles.<name>]``; returns (path, default-profile cleared?)."""
+    path = resolve_config_write_path(config_path)
+    doc = _load_toml_document(path)
+    profiles = doc.get("profiles")
+    if not isinstance(profiles, dict) or name not in profiles:
+        raise UnknownProfileError(f"Unknown profile {name!r}")
+    del profiles[name]
+    cleared = doc.get("default-profile") == name
+    if cleared:
+        del doc["default-profile"]
+    _write_toml_document(path, doc)
+    return path, cleared
+
+
+def set_default_profile(name: str | None, config_path: str | None = None) -> Path:
+    """Set ``default-profile`` (or clear it when *name* is None)."""
+    path = resolve_config_write_path(config_path)
+    doc = _load_toml_document(path)
+    if name is None:
+        if "default-profile" in doc:
+            del doc["default-profile"]
+    else:
+        profiles = doc.get("profiles")
+        if not isinstance(profiles, dict) or name not in profiles:
+            raise UnknownProfileError(f"Unknown profile {name!r}")
+        doc["default-profile"] = name
+    _write_toml_document(path, doc)
+    return path
+
+
+def list_profiles(cfg: dict) -> list[str]:
+    """Return the sorted names of connection profiles defined in the config."""
+    profiles = cfg.get("profiles")
+    if not isinstance(profiles, dict):
+        return []
+    return sorted(name for name, entry in profiles.items() if isinstance(entry, dict))
+
+
+def get_jenkins_config(cfg: dict, profile: str | None = None) -> tuple[str, str, str]:
+    """Extract Jenkins connection settings from config, falling back to env vars.
+
+    With ``profile``, settings come from ``[profiles.<name>]`` and the flat
+    jenkins-* keys are never consulted; missing fields fall back to env vars.
+    Raises ``ValueError`` for an unknown profile (the CLI validates first).
+    """
+    if profile is not None:
+        profiles = cfg.get("profiles")
+        entry = profiles.get(profile) if isinstance(profiles, dict) else None
+        if not isinstance(entry, dict):
+            raise UnknownProfileError(f"Unknown profile {profile!r}")
+        url = entry.get("url") or os.environ.get("JEEVES_URL", "http://localhost:8080")
+        username = entry.get("username") or os.environ.get("JEEVES_USER", "")
+        token = entry.get("token") or os.environ.get("JEEVES_TOKEN", "")
+        return url, username, token
+
     url = cfg.get("jenkins-url") or os.environ.get(
         "JEEVES_URL", "http://localhost:8080"
     )
     username = cfg.get("jenkins-username") or os.environ.get("JEEVES_USER", "")
     token = cfg.get("jenkins-token") or os.environ.get("JEEVES_TOKEN", "")
     return url, username, token
+
+
+_MASKED_KEYS = ("jenkins-token", "token")
+
+
+def _display_value(key: str, value: object) -> str:
+    """Repr for display, masking credential values (never mutates the config)."""
+    if key in _MASKED_KEYS and value:
+        return repr("***")
+    return repr(value)
 
 
 def show_config(cfg: dict, config_path: str | None = None) -> str:
@@ -116,8 +293,21 @@ def show_config(cfg: dict, config_path: str | None = None) -> str:
         lines.append(f"Config file: {found or '(none found)'}")
     lines.append("")
     if cfg:
+        profiles = cfg.get("profiles")
         for key, value in sorted(cfg.items()):
-            lines.append(f"  {key} = {value!r}")
+            if key == "profiles" and isinstance(profiles, dict):
+                continue
+            lines.append(f"  {key} = {_display_value(key, value)}")
+        if isinstance(profiles, dict):
+            lines.append("  profiles:")
+            for name, entry in sorted(profiles.items()):
+                if not isinstance(entry, dict):
+                    lines.append(f"    {name} = {entry!r}")
+                    continue
+                fields = " ".join(
+                    f"{k}={_display_value(k, v)}" for k, v in sorted(entry.items())
+                )
+                lines.append(f"    {name}: {fields}")
     else:
         lines.append("  (no config keys set)")
     return "\n".join(lines)

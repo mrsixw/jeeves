@@ -12,12 +12,23 @@ import sys
 import time
 import webbrowser
 from dataclasses import dataclass, field
+from xml.etree import ElementTree
 
 import click
 from tabulate import tabulate
 
 from . import render as _render
-from .config import get_jenkins_config, load_config, show_config, write_default_config
+from .config import (
+    UnknownProfileError,
+    add_profile,
+    get_jenkins_config,
+    list_profiles,
+    load_config,
+    remove_profile,
+    set_default_profile,
+    show_config,
+    write_default_config,
+)
 from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
@@ -41,15 +52,43 @@ class _Ctx:
     url: str | None = None
     user: str | None = None
     token: str | None = None
+    profile: str | None = None
+    config_path: str | None = None
 
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
 pass_ctx = click.make_pass_decorator(_Ctx)
 
 
+def _complete_profile(ctx, param, incomplete) -> list:
+    """Shell-complete --profile values from the config's profile names."""
+    from click.shell_completion import CompletionItem
+
+    try:
+        cfg = load_config(ctx.params.get("config_path"))
+    except (ValueError, OSError):
+        return []
+    return [
+        CompletionItem(name)
+        for name in list_profiles(cfg)
+        if name.startswith(incomplete)
+    ]
+
+
 def _isatty() -> bool:
     """Whether stdout is an interactive terminal (seam for testing)."""
     return sys.stdout.isatty()
+
+
+def _butler_fail(text: str, colour: bool) -> None:
+    """Emit a pre-worded butler error to stderr and exit 1."""
+    click.echo(click.style(f"🎩 {text}", fg="red"), err=True, color=colour)
+    sys.exit(1)
+
+
+def _butler_bother(exc: Exception, colour: bool) -> None:
+    """Generic 'spot of bother' failure for unexpected errors."""
+    _butler_fail(f"I'm afraid there's been a spot of bother, sir: {exc}", colour)
 
 
 def _butler_error(msg: str, colour: bool) -> None:
@@ -101,7 +140,8 @@ def _butler_error(msg: str, colour: bool) -> None:
 
 
 def _make_client(ctx: _Ctx) -> JenkinsClient:
-    cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg)
+    # main() validated ctx.profile against the config before building _Ctx.
+    cfg_url, cfg_user, cfg_token = get_jenkins_config(ctx.cfg, ctx.profile)
     return JenkinsClient(
         ctx.url or cfg_url, ctx.user or cfg_user, ctx.token or cfg_token
     )
@@ -118,7 +158,7 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )
-@click.version_option(package_name="jeeves")
+@click.version_option(package_name="jeeves", prog_name="jeeves")
 # ── Connection ─────────────────────────────────────────────────────────────
 @click.option(
     "--url",
@@ -140,6 +180,14 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     metavar="TOKEN",
     envvar="JEEVES_TOKEN",
     help="Jenkins API token (overrides config).",
+)
+@click.option(
+    "--profile",
+    default=None,
+    metavar="NAME",
+    envvar="JEEVES_PROFILE",
+    shell_complete=_complete_profile,
+    help="Named connection profile from config [profiles.NAME] (overrides flat keys).",
 )
 # ── Shell completions ──────────────────────────────────────────────────────
 @click.option(
@@ -242,6 +290,7 @@ def main(
     url,
     user,
     token,
+    profile,
     completion_shell,
     config_path,
     do_show_config,
@@ -293,6 +342,33 @@ def main(
         click.echo(show_config(cfg, config_path))
         sys.exit(0)
 
+    # ── Profile resolution ──────────────────────────────────────────────────
+    # The profile group manages the config itself and must stay usable even
+    # when default-profile points at nothing, so it skips validation.
+    profile = profile or cfg.get("default-profile") or None
+    if profile is not None and ctx.invoked_subcommand != "profile":
+        available = list_profiles(cfg)
+        if profile not in available:
+            if available:
+                detail = f"The profiles at my disposal are: {', '.join(available)}."
+            else:
+                detail = "No profiles are configured at all."
+            _butler_fail(
+                f"I regret I know of no profile called '{profile}', sir. {detail}",
+                colour,
+            )
+        # A profile's fields beat env vars; env-sourced --url/--user/--token
+        # values would otherwise override them at flag level. Genuine
+        # command-line flags keep their per-field override.
+        from click.core import ParameterSource
+
+        if ctx.get_parameter_source("url") == ParameterSource.ENVIRONMENT:
+            url = None
+        if ctx.get_parameter_source("user") == ParameterSource.ENVIRONMENT:
+            user = None
+        if ctx.get_parameter_source("token") == ParameterSource.ENVIRONMENT:
+            token = None
+
     # ── Resolve display options ────────────────────────────────────────────
     theme_name = theme if theme is not None else cfg.get("theme", "default")
     seasonal_colours = (
@@ -324,6 +400,8 @@ def main(
         url=url,
         user=user,
         token=token,
+        profile=profile,
+        config_path=config_path,
     )
     ctx.ensure_object(_Ctx)
 
@@ -427,6 +505,205 @@ def build() -> None:
 @main.group("node")
 def node_group() -> None:
     """Work with Jenkins build nodes (agents)."""
+
+
+@main.group("profile")
+def profile_group() -> None:
+    """Manage named connection profiles in the config file."""
+
+
+# ── profile management ───────────────────────────────────────────────────────
+
+
+def _read_secret(label: str) -> str:
+    """Read a secret from a hidden prompt (TTY) or stdin (pipe)."""
+    if sys.stdin.isatty():
+        return click.prompt(label, hide_input=True).strip()
+    return sys.stdin.read().strip()
+
+
+@profile_group.command("list")
+@pass_ctx
+def profile_list(ctx: _Ctx) -> None:
+    """List the connection profiles defined in the config file."""
+    raw = ctx.cfg.get("profiles")
+    raw = raw if isinstance(raw, dict) else {}
+    default = ctx.cfg.get("default-profile")
+    records = [
+        {
+            "name": name,
+            "url": entry.get("url", ""),
+            "username": entry.get("username", ""),
+            "token_set": bool(entry.get("token")),
+            "default": name == default,
+        }
+        for name, entry in sorted(raw.items())
+        if isinstance(entry, dict)
+    ]
+
+    def token_cell(r: dict) -> str:
+        return "***" if r["token_set"] else ""
+
+    def default_cell(r: dict) -> str:
+        return "✓" if r["default"] else ""
+
+    columns = [
+        Column("name", "Name"),
+        Column("url", "URL"),
+        Column("username", "Username"),
+        Column(
+            "token_set",
+            "Token",
+            table=lambda r, _i: token_cell(r) or "—",
+            plain=token_cell,
+        ),
+        Column(
+            "default",
+            "Default",
+            table=lambda r, _i: default_cell(r),
+            plain=default_cell,
+        ),
+    ]
+    _emit(
+        ctx,
+        records,
+        columns,
+        header="📇 The connection ledger.",
+        empty=(
+            "🗂️ The ledger holds no profiles at present. "
+            "'jeeves profile add' will remedy that in short order."
+        ),
+    )
+
+
+@profile_group.command("add")
+@click.argument("name")
+@click.option("--url", default=None, metavar="URL", help="Jenkins server URL.")
+@click.option("--username", default=None, metavar="USER", help="Jenkins username.")
+@click.option(
+    "--token",
+    default=None,
+    metavar="TOKEN",
+    help="Jenkins API token; pass '-' to read it from a hidden prompt or stdin.",
+)
+@click.option(
+    "--default",
+    "make_default",
+    is_flag=True,
+    default=False,
+    help="Also make this profile the default-profile.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Update an existing profile (merges only the fields given).",
+)
+@pass_ctx
+def profile_add(
+    ctx: _Ctx,
+    name: str,
+    url: str | None,
+    username: str | None,
+    token: str | None,
+    make_default: bool,
+    force: bool,
+) -> None:
+    """Add a connection profile (or update one with --force)."""
+    if token == "-":
+        token = _read_secret("Token")
+    try:
+        path = add_profile(
+            name,
+            url=url,
+            username=username,
+            token=token,
+            make_default=make_default,
+            force=force,
+            config_path=ctx.config_path,
+        )
+    except ValueError as exc:
+        if "already exists" in str(exc):
+            _butler_fail(
+                f"Profile '{name}' is already on the books, sir. "
+                "Add --force if I should amend it.",
+                ctx.colour,
+            )
+        _butler_bother(exc, ctx.colour)
+    except OSError as exc:
+        _butler_bother(exc, ctx.colour)
+    suffix = " as the default" if make_default else ""
+    click.echo(f"📇 Very good. Profile '{name}' is entered into the ledger{suffix}.")
+    click.echo(f"Config file: {path}", err=True)
+
+
+@profile_group.command("remove")
+@click.argument("name", shell_complete=_complete_profile)
+@pass_ctx
+def profile_remove(ctx: _Ctx, name: str) -> None:
+    """Remove a connection profile from the config file."""
+    try:
+        _path, cleared = remove_profile(name, config_path=ctx.config_path)
+    except UnknownProfileError:
+        available = list_profiles(ctx.cfg)
+        detail = (
+            f"The profiles at my disposal are: {', '.join(available)}."
+            if available
+            else "No profiles are configured at all."
+        )
+        _butler_fail(
+            f"I regret I know of no profile called '{name}', sir. {detail}",
+            ctx.colour,
+        )
+    except (ValueError, OSError) as exc:
+        _butler_bother(exc, ctx.colour)
+    if cleared:
+        click.echo(
+            f"🗑️ Profile '{name}' has been struck from the ledger, "
+            "and the default cleared with it."
+        )
+    else:
+        click.echo(f"🗑️ Profile '{name}' has been struck from the ledger.")
+
+
+@profile_group.command("use")
+@click.argument("name", required=False, shell_complete=_complete_profile)
+@click.option(
+    "--clear",
+    is_flag=True,
+    default=False,
+    help="Unset default-profile (revert to the flat jenkins-* keys).",
+)
+@pass_ctx
+def profile_use(ctx: _Ctx, name: str | None, clear: bool) -> None:
+    """Set (or with --clear unset) the default connection profile."""
+    if clear == bool(name):
+        _butler_fail(
+            "Kindly name a profile or pass --clear, sir — one or the other.",
+            ctx.colour,
+        )
+    try:
+        set_default_profile(None if clear else name, config_path=ctx.config_path)
+    except UnknownProfileError:
+        available = list_profiles(ctx.cfg)
+        detail = (
+            f"The profiles at my disposal are: {', '.join(available)}."
+            if available
+            else "No profiles are configured at all."
+        )
+        _butler_fail(
+            f"I regret I know of no profile called '{name}', sir. {detail}",
+            ctx.colour,
+        )
+    except (ValueError, OSError) as exc:
+        _butler_bother(exc, ctx.colour)
+    if clear:
+        click.echo(
+            "📌 Very good. The default profile is cleared; "
+            "the household reverts to the flat keys."
+        )
+    else:
+        click.echo(f"📌 Very good. '{name}' shall be the default henceforth.")
 
 
 # ── job list ─────────────────────────────────────────────────────────────────
@@ -687,6 +964,39 @@ def _test_case_records(data: dict, failed_only: bool) -> list[dict]:
                 }
             )
     return records
+
+
+def _node_host_from_config(config_xml: str) -> str | None:
+    """Extract the launcher host (IP or hostname) from a node's config.xml.
+
+    Only launchers that dial out to the agent (e.g. SSH) configure a host;
+    inbound (JNLP) agents connect to Jenkins themselves, so there is nothing
+    to report and None is returned.
+    """
+    try:
+        root = ElementTree.fromstring(config_xml)
+    except ElementTree.ParseError:
+        return None
+    launcher = root.find("launcher")
+    if launcher is None:
+        return None
+    host = (launcher.findtext(".//host") or "").strip()
+    return host or None
+
+
+def _node_address(client: JenkinsClient, name: str, is_built_in: bool) -> str | None:
+    """Resolve a node's address via its config.xml (None when unavailable).
+
+    The built-in node runs inside the controller and has no config.xml.
+    Permission errors (config.xml needs Extended Read) degrade to None
+    rather than failing the whole listing.
+    """
+    if is_built_in:
+        return "(local)"
+    try:
+        return _node_host_from_config(client.node_config(name))
+    except JenkinsError:
+        return None
 
 
 def _parse_params(raw: tuple[str, ...]) -> dict[str, str]:
@@ -1395,21 +1705,59 @@ def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     click.echo(text, nl=False)
 
 
+_FOLLOW_POLL_INTERVAL = 1.0
+
+
+def _follow_impl(ctx: _Ctx, job: str, build_id: str) -> None:
+    client = _make_client(ctx)
+    start = 0
+    try:
+        while True:
+            try:
+                text, start, more_data = client.progressive_log(
+                    job, build=build_id, start=start
+                )
+            except JenkinsError as exc:
+                _butler_error(str(exc), ctx.colour)
+                sys.exit(1)
+            if text:
+                click.echo(text, nl=False)
+            if not more_data:
+                break
+            time.sleep(_FOLLOW_POLL_INTERVAL)
+    except KeyboardInterrupt:
+        click.echo(
+            "\n🎩 Very good — I shall cease following.", err=True, color=ctx.colour
+        )
+        sys.exit(130)
+
+
 @build.command("log")
 @click.argument("job")
 @click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Follow a running build's log live (tail -f style) until it completes.",
+)
 @pass_ctx
 def build_log(
     ctx: _Ctx,
     job: str,
     build_id: str,
+    follow: bool,
 ) -> None:
     """Show the console log for a build.
 
     JOB is the job name; BUILD is a build number or permalink
     (default: lastBuild).
     """
-    _log_impl(ctx, job, build_id)
+    if follow:
+        _follow_impl(ctx, job, build_id)
+    else:
+        _log_impl(ctx, job, build_id)
 
 
 # ── build test-report ────────────────────────────────────────────────────────
@@ -1620,8 +1968,14 @@ def _disk_table_cell(num: int | None, colour: bool) -> str:
     default=False,
     help="Show node health metrics (disk, temp, swap, response time, arch).",
 )
+@click.option(
+    "--address",
+    is_flag=True,
+    default=False,
+    help="Show each node's launcher host/IP (one extra request per node).",
+)
 @pass_ctx
-def node_list(ctx: _Ctx, stats: bool) -> None:
+def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
     """List Jenkins build nodes (agents)."""
     client = _make_client(ctx)
     try:
@@ -1647,6 +2001,10 @@ def node_list(ctx: _Ctx, stats: bool) -> None:
         }
         if stats:
             record.update(_node_stat_fields(n.get("monitorData") or {}))
+        if address:
+            record["address"] = _node_address(
+                client, display_name, display_name in built_in
+            )
         records.append(record)
 
     def name_table(r: dict, i: int) -> str:
@@ -1733,6 +2091,15 @@ def node_list(ctx: _Ctx, stats: bool) -> None:
                 plain=lambda r: ", ".join(r["labels"]),
             ),
         ]
+    if address:
+        columns.append(
+            Column(
+                "address",
+                "Address",
+                table=lambda r, _i: r["address"] or "—",
+                plain=lambda r: r["address"] or "",
+            )
+        )
     _emit(
         ctx,
         records,

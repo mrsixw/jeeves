@@ -1,7 +1,11 @@
 .ONESHELL:
 SHELL = /bin/bash
 
-.PHONY: build release test lint docs-lint format man completions
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+DESTDIR ?=
+
+.PHONY: build release test lint docs-lint format man completions install uninstall
 
 .venv:
 	uv venv .venv
@@ -11,6 +15,13 @@ build: .venv
 	uv sync --extra build
 	mkdir -p dist
 	uv run shiv -c jeeves -o dist/jeeves --python '/usr/bin/env python3' --preamble utils/preamble.py .
+
+install: build
+	install -d "$(DESTDIR)$(BINDIR)"
+	install -m 755 dist/jeeves "$(DESTDIR)$(BINDIR)/jeeves"
+
+uninstall:
+	rm -f "$(DESTDIR)$(BINDIR)/jeeves"
 
 release: build
 
