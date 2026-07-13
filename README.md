@@ -38,12 +38,42 @@ The pre-0.18 flat commands (`jobs`, `build JOB`, `builds …`, `params`, `log`, 
 curl -sSL https://raw.githubusercontent.com/mrsixw/jeeves/main/install.sh | bash
 ```
 
+Or build and install from source:
+
+```bash
+git clone https://github.com/mrsixw/jeeves.git
+cd jeeves
+make build
+sudo make install
+```
+
+*(Note: This compiles and installs the butler locally from your source checkout. If you want to download and install a pre-compiled binary instantly instead, use the `install.sh` script above).*
+
+By default, this installs the executable to `/usr/local/bin`. You can customize the installation prefix using the `PREFIX` variable:
+
+```bash
+make install PREFIX=$HOME/.local
+```
+
+To uninstall:
+
+```bash
+sudo make uninstall
+```
+
+If installed with a custom `PREFIX`:
+
+```bash
+make uninstall PREFIX=$HOME/.local
+```
+
 ## Quick start
 
 ```bash
 jeeves --init-config                       # write a starter config
 jeeves status                              # check the Jenkins server
 jeeves job list                            # list jobs and their status
+jeeves --profile staging job list          # target a named [profiles.*] server
 jeeves --format json job list | jq        # structured output for scripting
 eval "$(jeeves --completion bash)"         # shell completions
 ```

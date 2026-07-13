@@ -46,6 +46,7 @@ jeeves build list my-pipeline                # recent build history
 jeeves build list my-pipeline --limit 50 --result FAILURE
 jeeves build show my-pipeline 142            # a specific build
 jeeves build log my-pipeline 142             # console output (default: lastBuild)
+jeeves build log my-pipeline --follow        # stream a running build live (tail -f)
 jeeves build test-report my-pipeline 142     # JUnit test report
 jeeves build test-report my-pipeline --failed-only   # only FAILED/REGRESSION cases
 jeeves build cancel my-pipeline 142          # cancel a running build
@@ -59,6 +60,7 @@ jeeves build rebuild my-pipeline --param ENV=staging   # ...overriding one of th
 ```bash
 jeeves node list                 # online/offline, executors, labels
 jeeves node list --stats         # + disk, temp, swap, response time, architecture
+jeeves node list --address       # + each agent's launcher host/IP
 jeeves --format json node list --stats   # raw byte/ms values for scripting
 ```
 
@@ -68,6 +70,28 @@ jeeves --format json node list --stats   # raw byte/ms values for scripting
 jeeves --init-config       # write ~/.config/jeeves/config.toml
 jeeves --show-config       # print resolved config
 jeeves --config my.toml    # use a custom config file
+```
+
+## Connection profiles
+
+Target multiple Jenkins servers from one config file. See
+[docs/manual/options.md](options.md) for the `[profiles.NAME]` schema and
+precedence rules.
+
+```bash
+jeeves --profile prod status                 # use a named profile for one command
+JEEVES_PROFILE=staging jeeves job list       # env alternative to the flag
+```
+
+## Managing profiles
+
+```bash
+jeeves profile list                             # table; tokens masked
+jeeves profile add prod --url https://ci.prod --username me --token -
+jeeves profile add prod --token - --force       # rotate just the token
+jeeves profile use prod                         # set default-profile
+jeeves profile use --clear                      # back to the flat keys
+jeeves profile remove staging                   # delete a profile
 ```
 
 ## Shell completions

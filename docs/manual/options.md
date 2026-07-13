@@ -10,8 +10,79 @@ jeeves --url https://ci.example.com --user me --token *** job list
 ```
 
 They override the config file, and each has an environment variable
-(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). Config keys live under
-`[jenkins]` in `config.toml`.
+(`JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN`). The config keys are flat,
+top-level entries in `config.toml`:
+
+```toml
+jenkins-url = "https://ci.example.com"
+jenkins-username = "me"
+jenkins-token = "..."
+```
+
+### Connection profiles (`--profile`)
+
+Define one `[profiles.NAME]` table per Jenkins server to switch between
+instances without retyping credentials:
+
+```toml
+default-profile = "prod"        # optional: used when --profile is not given
+
+[profiles.prod]
+url = "https://jenkins.prod.example.com"
+username = "me"
+token = "..."
+
+[profiles.staging]
+url = "https://jenkins.staging.example.com"
+```
+
+```bash
+jeeves --profile staging job list
+JEEVES_PROFILE=staging jeeves status    # env alternative to the flag
+```
+
+Which profile is active: `--profile` beats `JEEVES_PROFILE`, which beats
+`default-profile`. Without any of these, the flat `jenkins-*` keys apply
+exactly as before.
+
+When a profile is active:
+
+- the flat `jenkins-*` keys are ignored entirely — a profile is
+  self-contained;
+- fields the profile omits fall back to `JEEVES_URL` / `JEEVES_USER` /
+  `JEEVES_TOKEN`, then to the built-in defaults;
+- `JEEVES_URL`-style environment variables **no longer override** the
+  profile's own fields (they are demoted to fallbacks) — but explicit
+  `--url` / `--user` / `--token` flags still win per field.
+
+An unknown profile name is refused up front with the list of configured
+profiles. Profile names needing dots or spaces must be TOML-quoted:
+`[profiles."my.prod"]`.
+
+### Managing profiles (`jeeves profile ...`)
+
+Profiles can be maintained without hand-editing the config file:
+
+```bash
+jeeves profile list                                    # table; tokens masked
+jeeves profile add prod --url https://ci.prod --username me --token - --default
+jeeves profile add prod --token - --force              # rotate just the token
+jeeves profile use staging                             # set default-profile
+jeeves profile use --clear                             # back to the flat keys
+jeeves profile remove prod                             # also clears a dangling default
+```
+
+Notes:
+
+- `--token -` reads the token from a hidden prompt (or stdin when piped),
+  keeping it out of shell history.
+- `add` refuses to touch an existing profile unless `--force`, which merges
+  only the fields you pass — omitted fields are kept.
+- Edits go to the file `--config` names, else the first existing config
+  search path, else `~/.config/jeeves/config.toml` (created with `0600`
+  permissions). Writes are atomic and preserve comments.
+- The `profile` commands work even when `default-profile` points at a
+  missing profile, so a broken config can always be repaired.
 
 ## Display options
 
@@ -98,7 +169,7 @@ Structured formats (`json`, `ndjson`) emit semantic values, never the
 decorative emoji. The JSON keys per command:
 
 - **job list**: `name`, `type`, `color`, `status`, `health`, `url`
-- **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms)
+- **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms; with `--address`, adds `address` — the agent's launcher host/IP, or `null` when unavailable)
 - **queue**: `name`, `reason`, `stuck`, `url`
 
 ### `--template`
