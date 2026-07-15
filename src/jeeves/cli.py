@@ -6,7 +6,6 @@ utmost discretion and efficiency.
 
 from __future__ import annotations
 
-import functools
 import random
 import sys
 import time
@@ -496,28 +495,12 @@ def status(ctx: _Ctx) -> None:
 # ── noun groups (job / build / node) ─────────────────────────────────────────
 
 
-class _BuildGroup(click.Group):
-    """`build` is a noun group, but the legacy verb `jeeves build JOB
-    [--param K=V]` still works: an unknown first token falls back to the
-    hidden deprecated trigger command; real subcommands take priority."""
-
-    def resolve_command(self, ctx, args):
-        if (
-            args
-            and not args[0].startswith("-")
-            and self.get_command(ctx, args[0]) is None
-        ):
-            # Return full `args` (not args[1:]) so the token becomes JOB.
-            return _LEGACY_BUILD_VERB.name, _LEGACY_BUILD_VERB, args
-        return super().resolve_command(ctx, args)
-
-
 @main.group()
 def job() -> None:
     """Work with Jenkins jobs: list, parameters, trigger."""
 
 
-@main.group(cls=_BuildGroup)
+@main.group()
 def build() -> None:
     """Inspect and manage a job's builds."""
 
@@ -2289,118 +2272,3 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
-
-
-# ── deprecated aliases ────────────────────────────────────────────────────────
-# The pre-noun-group flat commands keep working for one release, hidden from
-# --help, each printing a gentle notice pointing at the new spelling.
-
-
-def _deprecation_notice(old: str, new: str) -> None:
-    ctx = click.get_current_context(silent=True)
-    obj = ctx.find_object(_Ctx) if ctx else None
-    colour = obj.colour if obj else True
-    quiet = obj.quiet if obj else False
-    if quiet:
-        # Still actionable for scripts, but without the butler flourish.
-        click.echo(f"Warning: 'jeeves {old}' has moved to 'jeeves {new}'.", err=True)
-        return
-    click.echo(
-        click.style(
-            f"🎩 A gentle word: 'jeeves {old}' has moved to 'jeeves {new}'. "
-            "The old form retires in a future release.",
-            fg="yellow",
-        ),
-        err=True,
-        color=colour,
-    )
-
-
-def _deprecated_alias(
-    old: str, new: str, target: click.Command, *, name: str
-) -> click.Command:
-    """A hidden Command that prints a deprecation notice then runs ``target``.
-
-    The alias shares ``target``'s Param objects — safe, since parse state lives
-    on the Context, not the Param; do not mutate params in place on either.
-    """
-
-    def _callback(*args, **kwargs):
-        _deprecation_notice(old, new)
-        return target.callback(*args, **kwargs)
-
-    functools.update_wrapper(_callback, target.callback)
-    return click.Command(
-        name=name,
-        params=list(target.params),
-        callback=_callback,
-        help=target.help,
-        hidden=True,
-    )
-
-
-main.add_command(_deprecated_alias("jobs", "job list", job_list, name="jobs"))
-main.add_command(
-    _deprecated_alias("params JOB", "job params JOB", job_params, name="params")
-)
-main.add_command(
-    _deprecated_alias("rebuild JOB", "build rebuild JOB", build_rebuild, name="rebuild")
-)
-main.add_command(_deprecated_alias("nodes", "node list", node_list, name="nodes"))
-
-# Reachable only via _BuildGroup's fallback (never registered on main): keeps
-# the legacy `jeeves build JOB [--param K=V]` trigger form working.
-_LEGACY_BUILD_VERB = _deprecated_alias(
-    "build JOB", "job trigger JOB", job_trigger, name="build"
-)
-
-_builds_alias = click.Group("builds", hidden=True, help="Deprecated: use 'build'.")
-_builds_alias.add_command(
-    _deprecated_alias(
-        "builds summary JOB", "build summary JOB", build_summary, name="summary"
-    )
-)
-_builds_alias.add_command(
-    _deprecated_alias("builds list JOB", "build list JOB", build_list, name="list")
-)
-_builds_alias.add_command(
-    _deprecated_alias(
-        "builds show JOB [BUILD]", "build show JOB [BUILD]", build_show, name="show"
-    )
-)
-main.add_command(_builds_alias)
-
-
-# `log` and `cancel` changed shape (--build option → positional BUILD), so
-# their aliases are hand-written with the old signatures frozen.
-@main.command("log", hidden=True)
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    default="lastBuild",
-    metavar="N",
-    help="Build number (default: lastBuild).",
-)
-@pass_ctx
-def legacy_log(ctx: _Ctx, job: str, build_id: str) -> None:
-    """Deprecated: use 'jeeves build log'."""
-    _deprecation_notice("log JOB --build N", "build log JOB [BUILD]")
-    _log_impl(ctx, job, build_id)
-
-
-@main.command("cancel", hidden=True)
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    required=True,
-    type=int,
-    metavar="N",
-    help="Build number to cancel.",
-)
-@pass_ctx
-def legacy_cancel(ctx: _Ctx, job: str, build_id: int) -> None:
-    """Deprecated: use 'jeeves build cancel'."""
-    _deprecation_notice("cancel JOB --build N", "build cancel JOB BUILD")
-    _cancel_impl(ctx, job, build_id)

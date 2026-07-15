@@ -28,10 +28,6 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves build rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
 | `jeeves node list [--stats]` | List build nodes (agents); `--stats` adds health metrics |
 
-### Deprecated spellings
-
-The pre-0.18 flat commands (`jobs`, `build JOB`, `builds …`, `params`, `log`, `cancel`, `rebuild`, `nodes`) still work for one more release. They are hidden from `--help` and print a gentle notice pointing at the new spelling. One caveat: a job literally named after a `build` subcommand (`list`, `summary`, `show`, `log`, `cancel`, `rebuild`, `test-report`) cannot be triggered via the legacy `jeeves build NAME` form — use `jeeves job trigger NAME`.
-
 ## Installation
 
 ```bash
