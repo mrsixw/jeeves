@@ -1,5 +1,7 @@
 """Jenkins HTTP API client."""
 
+import re
+
 import requests
 from requests.auth import HTTPBasicAuth
 
@@ -142,10 +144,27 @@ class JenkinsClient:
                 return None
             raise
 
-    def build(self, job: str, params: dict | None = None) -> None:
+    def build(self, job: str, params: dict | None = None) -> int | None:
+        """Trigger a build.
+
+        Returns the queue item id parsed from the response's ``Location``
+        header (Jenkins points it at ``/queue/item/{id}/``), or ``None``
+        when the header is absent — callers that don't follow the build
+        can simply ignore the return value.
+        """
         job_path = _normalize_jenkins_path(job)
         endpoint = f"{job_path}/buildWithParameters" if params else f"{job_path}/build"
-        self._post(endpoint, data=params)
+        resp = self._post(endpoint, data=params)
+        match = re.search(r"/queue/item/(\d+)", resp.headers.get("Location", ""))
+        return int(match.group(1)) if match else None
+
+    def queue_item(self, item_id: int) -> dict:
+        """Fetch a queue item's JSON by id (used to follow a triggered build).
+
+        While pending the item carries ``why``; once an executor picks it
+        up it gains ``executable.number`` — the build number to follow.
+        """
+        return self._get(f"queue/item/{item_id}")
 
     def log(self, job: str, build: int | str = "lastBuild") -> str:
         job_path = _normalize_jenkins_path(job)
