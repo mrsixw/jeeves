@@ -22,7 +22,17 @@ from tabulate import tabulate
 
 # Format names accepted by --format. ``tree`` is only meaningful for commands
 # that supply a tree renderer (e.g. the hierarchical jobs roster).
-FORMATS = ["table", "tree", "json", "ndjson", "markdown", "csv", "tsv", "template"]
+FORMATS = [
+    "table",
+    "tree",
+    "json",
+    "ndjson",
+    "markdown",
+    "csv",
+    "tsv",
+    "template",
+    "plain",
+]
 
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[a-zA-Z]|\]8;;.*?\x1b\\|\]8;;.*?\x07)")
 
@@ -119,6 +129,12 @@ def render_delimited(records: list[dict], columns: list[Column], delimiter: str)
     return buf.getvalue().rstrip("\n")
 
 
+def render_plain_table(records: list[dict], columns: list[Column]) -> str:
+    headers = [c.header for c in columns]
+    rows = [[c.render_plain(r) for c in columns] for r in records]
+    return tabulate(rows, headers=headers, tablefmt="simple", disable_numparse=True)
+
+
 def render_template(records: list[dict], template: str) -> str:
     lines = []
     for r in records:
@@ -159,4 +175,6 @@ def render(
         if not template:
             raise ValueError("--template is required when using --format template")
         return render_template(records, template)
+    if fmt == "plain":
+        return render_plain_table(records, columns)
     raise ValueError(f"unknown format: {fmt}")  # pragma: no cover

@@ -6,7 +6,6 @@ utmost discretion and efficiency.
 
 from __future__ import annotations
 
-import functools
 import random
 import sys
 import time
@@ -49,6 +48,7 @@ class _Ctx:
     seasonal_calendar: str = "western"
     fmt: str = "table"
     template: str | None = None
+    quiet: bool = False
     url: str | None = None
     user: str | None = None
     token: str | None = None
@@ -91,7 +91,10 @@ def _butler_bother(exc: Exception, colour: bool) -> None:
     _butler_fail(f"I'm afraid there's been a spot of bother, sir: {exc}", colour)
 
 
-def _butler_error(msg: str, colour: bool) -> None:
+def _butler_error(msg: str, colour: bool, quiet: bool = False) -> None:
+    if quiet:
+        click.echo(f"Error: {msg}", err=True)
+        return
     if "requires browser login at" in msg:
         url = msg.split("requires browser login at ", 1)[-1].strip()
         text = (
@@ -284,6 +287,13 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     envvar=f"{_ENVVAR_PREFIX}_NO_UPDATE_CHECK",
     help="Disable the automatic update check.",
 )
+@click.option(
+    "--quiet",
+    is_flag=True,
+    default=False,
+    envvar=f"{_ENVVAR_PREFIX}_QUIET",
+    help="Suppress butler personality output (greeting, headers, empty states).",
+)
 @click.pass_context
 def main(
     ctx,
@@ -304,6 +314,7 @@ def main(
     cache,
     cache_ttl,
     no_update_check,
+    quiet,
 ):
     """🎩 jeeves — your Jenkins CI/CD butler.
 
@@ -382,6 +393,7 @@ def main(
         else cfg.get("seasonal-calendar", "western")
     )
     no_update_check = no_update_check or cfg.get("no-update-check", False)
+    quiet = quiet or cfg.get("quiet", False)
     output_format = (
         output_format if output_format is not None else cfg.get("format", "table")
     ).lower()
@@ -397,6 +409,7 @@ def main(
         seasonal_calendar=seasonal_calendar or "western",
         fmt=output_format,
         template=output_template,
+        quiet=quiet,
         url=url,
         user=user,
         token=token,
@@ -407,26 +420,31 @@ def main(
 
     # ── Bare invocation: greet the user ───────────────────────────────────
     if ctx.invoked_subcommand is None:
-        spinner = random.choice(_BUTLER_ITEMS)
-        greeting = (
-            f"{spinner} Good morning. " "How may Jeeves be of assistance? Try --help."
-        )
-        if seasonal_colours and not no_colour:
-            greeting = apply_seasonal_colour(greeting, 0, calendar=seasonal_calendar)
-        elif not no_colour:
-            greeting = active_theme.apply(greeting, role="primary")
-        click.echo(greeting, err=True, color=colour)
+        if not quiet:
+            spinner = random.choice(_BUTLER_ITEMS)
+            greeting = (
+                f"{spinner} Good morning. "
+                "How may Jeeves be of assistance? Try --help."
+            )
+            if seasonal_colours and not no_colour:
+                greeting = apply_seasonal_colour(
+                    greeting, 0, calendar=seasonal_calendar
+                )
+            elif not no_colour:
+                greeting = active_theme.apply(greeting, role="primary")
+            click.echo(greeting, err=True, color=colour)
         return
 
     # ── Update check (runs after the subcommand via close callback) ────────
     if not no_update_check:
 
         def _check() -> None:
-            msg = check_for_update()
-            if msg:
-                click.echo(
-                    click.style(msg, fg="cyan", bold=True), err=True, color=colour
-                )
+            if not quiet:
+                msg = check_for_update()
+                if msg:
+                    click.echo(
+                        click.style(msg, fg="cyan", bold=True), err=True, color=colour
+                    )
 
         ctx.call_on_close(_check)
 
@@ -442,7 +460,7 @@ def status(ctx: _Ctx) -> None:
     try:
         data = client.status()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     desc = data.get("nodeDescription", "Jenkins")
@@ -450,11 +468,12 @@ def status(ctx: _Ctx) -> None:
     executors = data.get("numExecutors", "?")
     jobs_count = len(data.get("jobs", []))
 
-    click.echo(
-        click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
-        err=True,
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(f"✅ Certainly. {desc} is in fine form.", fg="green"),
+            err=True,
+            color=ctx.colour,
+        )
     mode_str = (
         click.style(mode, fg="green", bold=True)
         if ctx.colour and mode.upper() == "NORMAL"
@@ -476,28 +495,12 @@ def status(ctx: _Ctx) -> None:
 # ── noun groups (job / build / node) ─────────────────────────────────────────
 
 
-class _BuildGroup(click.Group):
-    """`build` is a noun group, but the legacy verb `jeeves build JOB
-    [--param K=V]` still works: an unknown first token falls back to the
-    hidden deprecated trigger command; real subcommands take priority."""
-
-    def resolve_command(self, ctx, args):
-        if (
-            args
-            and not args[0].startswith("-")
-            and self.get_command(ctx, args[0]) is None
-        ):
-            # Return full `args` (not args[1:]) so the token becomes JOB.
-            return _LEGACY_BUILD_VERB.name, _LEGACY_BUILD_VERB, args
-        return super().resolve_command(ctx, args)
-
-
 @main.group()
 def job() -> None:
     """Work with Jenkins jobs: list, parameters, trigger."""
 
 
-@main.group(cls=_BuildGroup)
+@main.group()
 def build() -> None:
     """Inspect and manage a job's builds."""
 
@@ -1164,16 +1167,16 @@ def _emit(
     decorative = ctx.fmt in ("table", "tree")
 
     if not records:
-        if decorative:
-            click.echo(empty, err=True)
-        else:
+        if decorative and not ctx.quiet:
+            click.echo(empty, err=True, color=ctx.colour)
+        elif not decorative:
             click.echo(
                 _render.render(ctx.fmt, [], columns, template=ctx.template),
                 color=ctx.colour,
             )
         return
 
-    if decorative:
+    if decorative and not ctx.quiet:
         click.echo(click.style(header, fg="cyan"), err=True, color=ctx.colour)
 
     cc = (
@@ -1191,7 +1194,7 @@ def _emit(
             compress_col=cc,
         )
     except ValueError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
     click.echo(out, color=ctx.colour)
 
@@ -1240,7 +1243,7 @@ def job_list(
     try:
         job_list = client.jobs(folder=folder, depth=depth)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = _collect_job_records(
@@ -1287,26 +1290,32 @@ def job_trigger(
     try:
         param_dict = _parse_params(params)
     except ValueError as exc:
-        click.echo(
-            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
-            err=True,
-            color=ctx.colour,
-        )
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
     client = _make_client(ctx)
     try:
         client.build(job_name, params=param_dict or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    click.echo(
-        click.style(
-            f"🚀 I shall dispatch '{job_name}' at once. Very good.", fg="green"
-        ),
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(
+                f"🚀 I shall dispatch '{job_name}' at once. Very good.", fg="green"
+            ),
+            color=ctx.colour,
+        )
 
 
 # ── builds ───────────────────────────────────────────────────────────────────
@@ -1451,7 +1460,7 @@ def build_summary(
             for permalink, label in _BUILD_PERMALINKS
         ]
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     if all(r["number"] is None for r in records):
@@ -1497,18 +1506,23 @@ def build_list(
     try:
         filter_dict = _parse_params(param_filters)
     except ValueError as exc:
-        click.echo(
-            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
-            err=True,
-            color=ctx.colour,
-        )
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
     client = _make_client(ctx)
     try:
         raw = client.builds(job, limit=limit)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = [_raw_build_record(b) for b in raw]
@@ -1545,7 +1559,7 @@ def build_show(
     try:
         info = client.build_info(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = [_raw_build_record(info)] if info is not None else []
@@ -1595,7 +1609,7 @@ def job_params(
     try:
         job_json = client.job(job)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = _param_records(job_json)
@@ -1662,11 +1676,16 @@ def build_rebuild(
     try:
         override_dict = _parse_params(overrides)
     except ValueError as exc:
-        click.echo(
-            click.style(f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"),
-            err=True,
-            color=ctx.colour,
-        )
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    f"I'm afraid '{exc}' is not in KEY=VALUE format.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        else:
+            click.echo(f"Error: '{exc}' is not in KEY=VALUE format.", err=True)
         sys.exit(1)
 
     client = _make_client(ctx)
@@ -1676,19 +1695,21 @@ def build_rebuild(
             _butler_error(
                 f"There is no build on record to repeat for '{job}'.",
                 ctx.colour,
+                ctx.quiet,
             )
             sys.exit(1)
         merged = {**_params_from_build(info), **override_dict}
         client.build(job, params=merged or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    message = f"🔁 Once more, with feeling — re-running '{job}'."
-    click.echo(click.style(message, fg="green"), color=ctx.colour)
-    if merged:
-        summary = ", ".join(f"{k}={v}" for k, v in merged.items())
-        click.echo(f"   with: {summary}", color=ctx.colour)
+    if not ctx.quiet:
+        message = f"🔁 Once more, with feeling — re-running '{job}'."
+        click.echo(click.style(message, fg="green"), color=ctx.colour)
+        if merged:
+            summary = ", ".join(f"{k}={v}" for k, v in merged.items())
+            click.echo(f"   with: {summary}", color=ctx.colour)
 
 
 # ── build log ────────────────────────────────────────────────────────────────
@@ -1699,7 +1720,7 @@ def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     try:
         text = client.log(job, build=build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     click.echo(text, nl=False)
@@ -1789,34 +1810,36 @@ def build_test_report(
     try:
         data = client.test_report(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     if data is None:
+        if not ctx.quiet:
+            click.echo(
+                click.style(
+                    "📋 No test report was filed for that build. "
+                    "Perhaps the test stage was skipped entirely.",
+                    fg="yellow",
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+        return
+
+    if not ctx.quiet:
+        pass_count = data.get("passCount", 0)
+        fail_count = data.get("failCount", 0)
+        skip_count = data.get("skipCount", 0)
+        duration = data.get("duration", 0.0)
         click.echo(
             click.style(
-                "📋 No test report was filed for that build. "
-                "Perhaps the test stage was skipped entirely.",
-                fg="yellow",
+                f"🧪 Tests: {pass_count} passed, {fail_count} failed, "
+                f"{skip_count} skipped — {duration:.2f}s",
+                fg="cyan",
             ),
             err=True,
             color=ctx.colour,
         )
-        return
-
-    pass_count = data.get("passCount", 0)
-    fail_count = data.get("failCount", 0)
-    skip_count = data.get("skipCount", 0)
-    duration = data.get("duration", 0.0)
-    click.echo(
-        click.style(
-            f"🧪 Tests: {pass_count} passed, {fail_count} failed, "
-            f"{skip_count} skipped — {duration:.2f}s",
-            fg="cyan",
-        ),
-        err=True,
-        color=ctx.colour,
-    )
 
     records = _test_case_records(data, failed_only)
 
@@ -1860,7 +1883,7 @@ def queue(ctx: _Ctx) -> None:
     try:
         items = client.queue()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     records = []
@@ -1923,13 +1946,16 @@ def _cancel_impl(ctx: _Ctx, job: str, build_id: int) -> None:
     try:
         client.cancel(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
-    click.echo(
-        click.style(f"🛑 Consider build #{build_id} of '{job}' dismissed.", fg="green"),
-        color=ctx.colour,
-    )
+    if not ctx.quiet:
+        click.echo(
+            click.style(
+                f"🛑 Consider build #{build_id} of '{job}' dismissed.", fg="green"
+            ),
+            color=ctx.colour,
+        )
 
 
 @build.command("cancel")
@@ -1981,7 +2007,7 @@ def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
     try:
         node_list = client.nodes(depth=1 if stats else 0)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     built_in = {"master", "Built-In Node"}
@@ -2123,7 +2149,7 @@ def whoami(ctx: _Ctx) -> None:
     try:
         data = client.whoami()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
 
     user_id = data.get("id", "anonymous")
@@ -2246,113 +2272,3 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
-
-
-# ── deprecated aliases ────────────────────────────────────────────────────────
-# The pre-noun-group flat commands keep working for one release, hidden from
-# --help, each printing a gentle notice pointing at the new spelling.
-
-
-def _deprecation_notice(old: str, new: str) -> None:
-    ctx = click.get_current_context(silent=True)
-    obj = ctx.find_object(_Ctx) if ctx else None
-    colour = obj.colour if obj else True
-    click.echo(
-        click.style(
-            f"🎩 A gentle word: 'jeeves {old}' has moved to 'jeeves {new}'. "
-            "The old form retires in a future release.",
-            fg="yellow",
-        ),
-        err=True,
-        color=colour,
-    )
-
-
-def _deprecated_alias(
-    old: str, new: str, target: click.Command, *, name: str
-) -> click.Command:
-    """A hidden Command that prints a deprecation notice then runs ``target``.
-
-    The alias shares ``target``'s Param objects — safe, since parse state lives
-    on the Context, not the Param; do not mutate params in place on either.
-    """
-
-    def _callback(*args, **kwargs):
-        _deprecation_notice(old, new)
-        return target.callback(*args, **kwargs)
-
-    functools.update_wrapper(_callback, target.callback)
-    return click.Command(
-        name=name,
-        params=list(target.params),
-        callback=_callback,
-        help=target.help,
-        hidden=True,
-    )
-
-
-main.add_command(_deprecated_alias("jobs", "job list", job_list, name="jobs"))
-main.add_command(
-    _deprecated_alias("params JOB", "job params JOB", job_params, name="params")
-)
-main.add_command(
-    _deprecated_alias("rebuild JOB", "build rebuild JOB", build_rebuild, name="rebuild")
-)
-main.add_command(_deprecated_alias("nodes", "node list", node_list, name="nodes"))
-
-# Reachable only via _BuildGroup's fallback (never registered on main): keeps
-# the legacy `jeeves build JOB [--param K=V]` trigger form working.
-_LEGACY_BUILD_VERB = _deprecated_alias(
-    "build JOB", "job trigger JOB", job_trigger, name="build"
-)
-
-_builds_alias = click.Group("builds", hidden=True, help="Deprecated: use 'build'.")
-_builds_alias.add_command(
-    _deprecated_alias(
-        "builds summary JOB", "build summary JOB", build_summary, name="summary"
-    )
-)
-_builds_alias.add_command(
-    _deprecated_alias("builds list JOB", "build list JOB", build_list, name="list")
-)
-_builds_alias.add_command(
-    _deprecated_alias(
-        "builds show JOB [BUILD]", "build show JOB [BUILD]", build_show, name="show"
-    )
-)
-main.add_command(_builds_alias)
-
-
-# `log` and `cancel` changed shape (--build option → positional BUILD), so
-# their aliases are hand-written with the old signatures frozen.
-@main.command("log", hidden=True)
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    default="lastBuild",
-    metavar="N",
-    help="Build number (default: lastBuild).",
-)
-@pass_ctx
-def legacy_log(ctx: _Ctx, job: str, build_id: str) -> None:
-    """Deprecated: use 'jeeves build log'."""
-    _deprecation_notice("log JOB --build N", "build log JOB [BUILD]")
-    _log_impl(ctx, job, build_id)
-
-
-@main.command("cancel", hidden=True)
-@click.argument("job")
-@click.option(
-    "--build",
-    "build_id",
-    required=True,
-    type=int,
-    metavar="N",
-    help="Build number to cancel.",
-)
-@pass_ctx
-def legacy_cancel(ctx: _Ctx, job: str, build_id: int) -> None:
-    """Deprecated: use 'jeeves build cancel'."""
-    _deprecation_notice("cancel JOB --build N", "build cancel JOB BUILD")
-    _cancel_impl(ctx, job, build_id)
