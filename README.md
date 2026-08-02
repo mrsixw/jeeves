@@ -18,7 +18,7 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves whoami` | Show the authenticated Jenkins user |
 | `jeeves job list [--folder NAME]` | List all jobs and their status |
 | `jeeves job params JOB` | Show a job's build parameters |
-| `jeeves job trigger JOB [--param K=V]` | Trigger a build |
+| `jeeves job trigger JOB [--param K=V] [--wait]` | Trigger a build; `--wait` follows it and exits with its verdict |
 | `jeeves build summary JOB` | Show last / successful / failed builds |
 | `jeeves build list JOB [--limit N] [--result X] [--param K=V]` | Show recent build history, optionally filtered by parameter |
 | `jeeves build show JOB [BUILD]` | Show a single build, including its parameters and causes |

@@ -19,6 +19,19 @@ RESET="\033[0m"
 
 echo -e "${BOLD}${BLUE}🍔 Firing up jeeves...${RESET}"
 
+# jeeves is a Python zipapp — python3 >= 3.11 must be present at runtime,
+# so check up front rather than failing cryptically after the download.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo -e "${BOLD}\033[31m❌ jeeves requires Python 3.11 or newer, but python3 was not found.${RESET}"
+    echo -e "Install Python 3.11+ (e.g. ${BOLD}apt-get install python3${RESET}) and re-run this installer."
+    exit 1
+fi
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    echo -e "${BOLD}\033[31m❌ jeeves requires Python 3.11 or newer, but found: $(python3 --version 2>&1).${RESET}"
+    echo -e "Install Python 3.11+ and re-run this installer."
+    exit 1
+fi
+
 echo -e "${YELLOW}Finding the latest version...${RESET}"
 RELEASE_BASE_URL="https://github.com/${REPO}/releases/latest/download"
 

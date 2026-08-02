@@ -1267,6 +1267,115 @@ def job_list(
 
 # ── job trigger ──────────────────────────────────────────────────────────────
 
+# Exit codes for --wait, mirroring the build's verdict (unknown verdicts → 1).
+_WAIT_EXIT_CODES = {"SUCCESS": 0, "FAILURE": 1, "UNSTABLE": 2, "ABORTED": 3}
+_WAIT_TIMEOUT_EXIT = 124
+
+_WAIT_VERDICTS = {
+    "SUCCESS": (
+        "green",
+        "✅ Build #{n} of '{job}' concluded: SUCCESS. Most satisfactory.",
+    ),
+    "UNSTABLE": (
+        "yellow",
+        "⚠️ Build #{n} of '{job}' concluded: UNSTABLE. A somewhat mixed report.",
+    ),
+    "FAILURE": (
+        "red",
+        "❌ Build #{n} of '{job}' concluded: FAILURE. I regret the outcome.",
+    ),
+    "ABORTED": ("red", "🛑 Build #{n} of '{job}' was aborted before completion."),
+}
+
+
+def _check_wait_deadline(deadline: float | None, colour: bool, timeout: float) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        click.echo(
+            click.style(
+                f"🎩 I fear my patience is exhausted, sir — "
+                f"no verdict after {timeout:g} seconds.",
+                fg="red",
+            ),
+            err=True,
+            color=colour,
+        )
+        sys.exit(_WAIT_TIMEOUT_EXIT)
+
+
+def _wait_for_build(
+    ctx: _Ctx,
+    client: JenkinsClient,
+    job_name: str,
+    queue_id: int,
+    poll_interval: float,
+    timeout: float | None,
+) -> None:
+    """Follow a queued build to completion and exit with its verdict's code.
+
+    Progress goes to stderr; the final verdict line is the command's data
+    and goes to stdout.
+    """
+    deadline = time.monotonic() + timeout if timeout else None
+
+    number = None
+    last_why = None
+    while number is None:
+        try:
+            item = client.queue_item(queue_id)
+        except JenkinsError as exc:
+            _butler_error(str(exc), ctx.colour)
+            sys.exit(1)
+        if item.get("cancelled"):
+            click.echo(
+                click.style(
+                    "🛑 The request was dismissed while still in the queue.", fg="red"
+                ),
+                err=True,
+                color=ctx.colour,
+            )
+            sys.exit(_WAIT_EXIT_CODES["ABORTED"])
+        number = (item.get("executable") or {}).get("number")
+        if number is None:
+            why = item.get("why")
+            if why and why != last_why:
+                click.echo(
+                    click.style(f"⏳ Held in the queue: {why}", fg="yellow"),
+                    err=True,
+                    color=ctx.colour,
+                )
+                last_why = why
+            _check_wait_deadline(deadline, ctx.colour, timeout)
+            time.sleep(poll_interval)
+
+    click.echo(
+        click.style(f"🔨 Build #{number} is under way.", fg="cyan"),
+        err=True,
+        color=ctx.colour,
+    )
+
+    while True:
+        try:
+            info = client.build_info(job_name, number)
+        except JenkinsError as exc:
+            _butler_error(str(exc), ctx.colour)
+            sys.exit(1)
+        result = (info or {}).get("result")
+        if info is not None and not info.get("building") and result:
+            break
+        _check_wait_deadline(deadline, ctx.colour, timeout)
+        time.sleep(poll_interval)
+
+    fg, template = _WAIT_VERDICTS.get(
+        result, ("red", "❓ Build #{n} of '{job}' concluded: {result}.")
+    )
+    click.echo(
+        click.style(
+            template.format(n=number, job=job_name, result=result), fg=fg, bold=True
+        ),
+        color=ctx.colour,
+    )
+    sys.exit(_WAIT_EXIT_CODES.get(result, 1))
+
 
 @job.command("trigger")
 @click.argument("job_name", metavar="JOB")
@@ -1277,15 +1386,47 @@ def job_list(
     metavar="KEY=VALUE",
     help="Build parameter in KEY=VALUE format. Repeatable.",
 )
+@click.option(
+    "--wait",
+    is_flag=True,
+    default=False,
+    help=(
+        "Follow the build to completion; the exit code mirrors its result "
+        "(0 success, 1 failure, 2 unstable, 3 aborted/cancelled, 124 timeout)."
+    ),
+)
+@click.option(
+    "--poll-interval",
+    "poll_interval",
+    type=click.FloatRange(min=0.1),
+    default=5.0,
+    show_default=True,
+    metavar="SECONDS",
+    help="Seconds between progress checks (only with --wait).",
+)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    metavar="SECONDS",
+    help="Give up waiting after this long (only with --wait; default: wait forever).",
+)
 @pass_ctx
 def job_trigger(
     ctx: _Ctx,
     job_name: str,
     params: tuple[str, ...],
+    wait: bool,
+    poll_interval: float,
+    timeout: float | None,
 ) -> None:
     """Trigger a Jenkins build.
 
     JOB is the job name (or folder/job path for nested jobs).
+
+    With --wait, jeeves follows the request through the queue and the
+    running build, and exits with a code mirroring the build's verdict —
+    handy for scripting: jeeves job trigger deploy --wait && ./smoke-test.sh
     """
     try:
         param_dict = _parse_params(params)
@@ -1304,7 +1445,7 @@ def job_trigger(
 
     client = _make_client(ctx)
     try:
-        client.build(job_name, params=param_dict or None)
+        queue_id = client.build(job_name, params=param_dict or None)
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour, ctx.quiet)
         sys.exit(1)
@@ -1316,6 +1457,16 @@ def job_trigger(
             ),
             color=ctx.colour,
         )
+
+    if not wait:
+        return
+    if queue_id is None:
+        _butler_fail(
+            "Jenkins accepted the request but declined to say where it was "
+            "queued, sir — I cannot follow its progress.",
+            ctx.colour,
+        )
+    _wait_for_build(ctx, client, job_name, queue_id, poll_interval, timeout)
 
 
 # ── builds ───────────────────────────────────────────────────────────────────

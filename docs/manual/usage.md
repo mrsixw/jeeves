@@ -36,7 +36,14 @@ jeeves job list                              # list jobs and their status
 jeeves job list --folder platform            # limit to a folder
 jeeves job params my-pipeline                # list the job's build parameters
 jeeves job trigger my-pipeline --param ENV=prod
+jeeves job trigger my-pipeline --wait        # follow it through to the verdict
+jeeves job trigger my-pipeline --wait --timeout 600 --poll-interval 10
 ```
+
+With `--wait`, jeeves follows the request through the queue and the running
+build, and the exit code mirrors the verdict — `0` success, `1` failure,
+`2` unstable, `3` aborted or cancelled, `124` timeout — so it composes in
+scripts: `jeeves job trigger deploy --wait && ./smoke-test.sh`.
 
 ## Working with builds
 
