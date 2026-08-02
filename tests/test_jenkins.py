@@ -271,6 +271,42 @@ def test_build_params_sent_as_form_body(client: JenkinsClient) -> None:
     assert "BRANCH=main" in adapter.last_request.body
 
 
+def test_build_returns_queue_item_id(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(
+            f"{BASE}/job/my-pipeline/build",
+            status_code=201,
+            headers={"Location": f"{BASE}/queue/item/123/"},
+        )
+        assert client.build("my-pipeline") == 123
+
+
+def test_build_returns_none_without_location(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/job/my-pipeline/build", status_code=201)
+        assert client.build("my-pipeline") is None
+
+
+def test_build_with_params_returns_queue_item_id(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(
+            f"{BASE}/job/my-pipeline/buildWithParameters",
+            status_code=201,
+            headers={"Location": f"{BASE}/queue/item/9/"},
+        )
+        assert client.build("my-pipeline", params={"ENV": "prod"}) == 9
+
+
+def test_queue_item_fetches_by_id(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/queue/item/123/api/json",
+            json={"why": "Waiting for next available executor"},
+        )
+        item = client.queue_item(123)
+    assert item["why"] == "Waiting for next available executor"
+
+
 def test_build_http_error_raises(client: JenkinsClient) -> None:
     with req_mock.Mocker() as m:
         m.post(f"{BASE}/job/my-pipeline/build", status_code=404)

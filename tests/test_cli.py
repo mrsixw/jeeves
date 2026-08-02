@@ -1347,6 +1347,166 @@ def test_rebuild_missing_build_errors(jenkins):
     assert "no build on record" in result.output
 
 
+# ── job trigger --wait ────────────────────────────────────────────────────────
+
+_QUEUED = {"why": "Waiting for next available executor"}
+_ASSIGNED = {"executable": {"number": 42}}
+
+
+def _wait_http(jenkins, queue_responses, build_responses):
+    """Register trigger + queue-item + build-info endpoints for --wait tests."""
+    location = {"Location": url("queue/item/55/")}
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(url("job/my-pipeline/build"), status_code=201, headers=location)
+    jenkins.post(
+        url("job/my-pipeline/buildWithParameters"), status_code=201, headers=location
+    )
+    jenkins.get(api("queue/item/55"), queue_responses)
+    if build_responses:
+        jenkins.get(api("job/my-pipeline/42"), build_responses)
+
+
+def _invoke_wait(*extra):
+    return _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "job",
+        "trigger",
+        "my-pipeline",
+        "--wait",
+        "--poll-interval",
+        "0.1",
+        *extra,
+    )
+
+
+def test_trigger_wait_success_exit_0(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _QUEUED}, {"json": _ASSIGNED}],
+        [
+            {"json": {"building": True, "result": None}},
+            {"json": {"building": False, "result": "SUCCESS"}},
+        ],
+    )
+    result = _invoke_wait()
+    assert result.exit_code == 0
+    assert "SUCCESS" in result.stdout
+    assert "Held in the queue" in result.stderr
+    assert "under way" in result.stderr
+
+
+def test_trigger_wait_failure_exit_1(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _ASSIGNED}],
+        [{"json": {"building": False, "result": "FAILURE"}}],
+    )
+    result = _invoke_wait()
+    assert result.exit_code == 1
+    assert "FAILURE" in result.stdout
+
+
+def test_trigger_wait_unstable_exit_2(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _ASSIGNED}],
+        [{"json": {"building": False, "result": "UNSTABLE"}}],
+    )
+    result = _invoke_wait()
+    assert result.exit_code == 2
+    assert "UNSTABLE" in result.stdout
+
+
+def test_trigger_wait_aborted_exit_3(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _ASSIGNED}],
+        [{"json": {"building": False, "result": "ABORTED"}}],
+    )
+    result = _invoke_wait()
+    assert result.exit_code == 3
+    assert "aborted" in result.stdout
+
+
+def test_trigger_wait_cancelled_in_queue_exit_3(jenkins):
+    _wait_http(jenkins, [{"json": {"cancelled": True}}], [])
+    result = _invoke_wait()
+    assert result.exit_code == 3
+    assert "dismissed" in result.stderr
+
+
+def test_trigger_wait_timeout_exit_124(jenkins, monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli_mod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(
+        cli_mod.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s)
+    )
+    _wait_http(jenkins, [{"json": _QUEUED}], [])
+    result = _invoke_wait("--timeout", "3")
+    assert result.exit_code == 124
+    assert "patience" in result.stderr
+
+
+def test_trigger_wait_why_emitted_once_per_change(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _QUEUED}, {"json": _QUEUED}, {"json": _ASSIGNED}],
+        [{"json": {"building": False, "result": "SUCCESS"}}],
+    )
+    result = _invoke_wait()
+    assert result.exit_code == 0
+    assert result.stderr.count("Held in the queue") == 1
+
+
+def test_trigger_wait_with_params_uses_buildwithparameters(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _s: None)
+    _wait_http(
+        jenkins,
+        [{"json": _ASSIGNED}],
+        [{"json": {"building": False, "result": "SUCCESS"}}],
+    )
+    result = _invoke_wait("--param", "ENV=prod")
+    assert result.exit_code == 0
+    assert _last_post(jenkins).url.lower().endswith("/buildwithparameters")
+
+
+def test_trigger_wait_without_location_errors(jenkins):
+    _trigger_http(jenkins)  # registers the POSTs without a Location header
+    result = _invoke(
+        "--no-colour", "--no-update-check", "job", "trigger", "my-pipeline", "--wait"
+    )
+    assert result.exit_code == 1
+    assert "cannot follow" in result.stderr
+
+
+def test_trigger_wait_queue_error_exits_1(jenkins):
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(
+        url("job/my-pipeline/build"),
+        status_code=201,
+        headers={"Location": url("queue/item/55/")},
+    )
+    jenkins.get(api("queue/item/55"), status_code=500)
+    result = _invoke_wait()
+    assert result.exit_code == 1
+    assert "500" in result.stderr
+
+
+def test_trigger_without_wait_does_not_poll(jenkins):
+    _trigger_http(jenkins)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "job", "trigger", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert all("queue/item" not in r.url for r in jenkins.request_history)
+
+
 # ── queue ─────────────────────────────────────────────────────────────────────
 
 
