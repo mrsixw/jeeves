@@ -8,6 +8,7 @@
 ## Project Structure
 - `src/jeeves/` — package source code
   - `cli.py` — Click group entrypoint with `status`, `queue`, `whoami`, `swatch` commands and `job`, `build`, `node` noun groups mirroring the Jenkins hierarchy
+  - `constants.py` — shared lookup tables and static data used by the CLI (job/build/test status maps, wait exit codes, etc.)
   - `jenkins.py` — Jenkins HTTP API client (`JenkinsClient`, `JenkinsError`, `_normalize_jenkins_path`)
   - `ui.py` — Terminal themes, seasonal colour system (SEASONAL_PALETTES, PRIDE_RAINBOW, HOLI_RAINBOW, THEMES registry)
   - `config.py` — TOML configuration loader; `get_jenkins_config()` extracts Jenkins connection settings

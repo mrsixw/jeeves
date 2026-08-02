@@ -28,14 +28,31 @@ from .config import (
     show_config,
     write_default_config,
 )
+from .constants import (
+    BUILD_PERMALINKS,
+    BUILD_RESULT_MAP,
+    BUTLER_ITEMS,
+    ENVVAR_PREFIX,
+    FOLDER_CLASS_FRAGMENTS,
+    FOLLOW_POLL_INTERVAL,
+    ICON_BY_LABEL,
+    JOB_COLOUR_MAP,
+    JOB_TYPE_FALLBACK,
+    JOB_TYPE_MAP,
+    OSC8_CLOSE,
+    OSC8_OPEN,
+    SNIPPET_LEN,
+    TEST_STATUS_MAP,
+    WAIT_EXIT_CODES,
+    WAIT_TIMEOUT_EXIT,
+    WAIT_VERDICTS,
+    WEATHER_MAP,
+)
 from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import check_for_update
-
-_ENVVAR_PREFIX = "JEEVES"
-_BUTLER_ITEMS = ["🎩", "🥂", "🤵", "📋", "🫗"]
 
 
 @dataclass
@@ -250,7 +267,7 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     "no_colour",
     is_flag=True,
     default=False,
-    envvar=f"{_ENVVAR_PREFIX}_NO_COLOUR",
+    envvar=f"{ENVVAR_PREFIX}_NO_COLOUR",
     help="Disable all ANSI colour output.",
 )
 @click.option(
@@ -284,14 +301,14 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     "--no-update-check",
     is_flag=True,
     default=False,
-    envvar=f"{_ENVVAR_PREFIX}_NO_UPDATE_CHECK",
+    envvar=f"{ENVVAR_PREFIX}_NO_UPDATE_CHECK",
     help="Disable the automatic update check.",
 )
 @click.option(
     "--quiet",
     is_flag=True,
     default=False,
-    envvar=f"{_ENVVAR_PREFIX}_QUIET",
+    envvar=f"{ENVVAR_PREFIX}_QUIET",
     help="Suppress butler personality output (greeting, headers, empty states).",
 )
 @click.pass_context
@@ -421,7 +438,7 @@ def main(
     # ── Bare invocation: greet the user ───────────────────────────────────
     if ctx.invoked_subcommand is None:
         if not quiet:
-            spinner = random.choice(_BUTLER_ITEMS)
+            spinner = random.choice(BUTLER_ITEMS)
             greeting = (
                 f"{spinner} Good morning. "
                 "How may Jeeves be of assistance? Try --help."
@@ -711,73 +728,33 @@ def profile_use(ctx: _Ctx, name: str | None, clear: bool) -> None:
 
 # ── job list ─────────────────────────────────────────────────────────────────
 
-# (colour, label, emoji)
-_JOB_COLOUR_MAP: dict[str, tuple[str, str, str]] = {
-    "blue": ("green", "passed", "✅"),
-    "blue_anime": ("green", "running", "▶️"),
-    "red": ("red", "failed", "❌"),
-    "red_anime": ("red", "running", "▶️"),
-    "yellow": ("yellow", "unstable", "⚠️"),
-    "yellow_anime": ("yellow", "running", "▶️"),
-    "grey": ("white", "disabled", "⏸️"),
-    "notbuilt": ("white", "not built", "🔘"),
-    "aborted": ("white", "aborted", "🚫"),
-    "aborted_anime": ("white", "running", "▶️"),
-}
-
-_FOLDER_CLASS_FRAGMENTS = ("Folder", "MultiBranch", "OrganizationFolder")
-
-# (class fragment, icon, label) — first match wins
-_JOB_TYPE_MAP: list[tuple[str, str, str]] = [
-    ("WorkflowJob", "🔁", "pipeline"),
-    ("FreeStyleProject", "🔧", "freestyle"),
-    ("MatrixProject", "🔢", "matrix"),
-]
-_JOB_TYPE_FALLBACK = ("🔨", "job")
-
-_OSC8_OPEN = "\x1b]8;;{url}\x1b\\"
-_OSC8_CLOSE = "\x1b]8;;\x1b\\"
-
 
 def _hyperlink(text: str, url: str, colour: bool) -> str:
     """Wrap text in an OSC 8 terminal hyperlink when colour output is active."""
     if not colour:
         return text
-    return f"{_OSC8_OPEN.format(url=url)}{text}{_OSC8_CLOSE}"
-
-
-_WEATHER_MAP: list[tuple[int, str, str, str]] = [
-    (80, "green", "☀️", "sunny"),
-    (60, "yellow", "🌤️", "fair"),
-    (40, "yellow", "☁️", "cloudy"),
-    (20, 208, "🌧️", "rainy"),
-    (0, "red", "⛈️", "stormy"),
-]
+    return f"{OSC8_OPEN.format(url=url)}{text}{OSC8_CLOSE}"
 
 
 def _is_folder(job: dict) -> bool:
     cls = job.get("_class", "")
-    return any(f in cls for f in _FOLDER_CLASS_FRAGMENTS)
-
-
-_ICON_BY_LABEL = {label: icon for _, icon, label in _JOB_TYPE_MAP}
-_ICON_BY_LABEL[_JOB_TYPE_FALLBACK[1]] = _JOB_TYPE_FALLBACK[0]
+    return any(f in cls for f in FOLDER_CLASS_FRAGMENTS)
 
 
 def _job_type_label(job: dict) -> str:
     """Semantic job-type label (e.g. 'pipeline') derived from the `_class`."""
     cls = job.get("_class", "")
-    for fragment, _icon, label in _JOB_TYPE_MAP:
+    for fragment, _icon, label in JOB_TYPE_MAP:
         if fragment in cls:
             return label
-    return _JOB_TYPE_FALLBACK[1]
+    return JOB_TYPE_FALLBACK[1]
 
 
 def _type_table_cell(label: str, colour: bool) -> str:
     """Decorated Type cell (icon + label) for table output."""
     if label == "folder":
         return click.style("📁 folder", fg="cyan") if colour else "📁 folder"
-    icon = _ICON_BY_LABEL.get(label, _JOB_TYPE_FALLBACK[0])
+    icon = ICON_BY_LABEL.get(label, JOB_TYPE_FALLBACK[0])
     return f"{icon} {label}"
 
 
@@ -789,11 +766,11 @@ def _render_type_key() -> str:
         ]
         + [
             (f"{icon} {label}", f"Jenkins {label} job")
-            for _, icon, label in _JOB_TYPE_MAP
+            for _, icon, label in JOB_TYPE_MAP
         ]
         + [
             (
-                f"{_JOB_TYPE_FALLBACK[0]} {_JOB_TYPE_FALLBACK[1]}",
+                f"{JOB_TYPE_FALLBACK[0]} {JOB_TYPE_FALLBACK[1]}",
                 "Other / unrecognised",
             ),
         ]
@@ -805,7 +782,7 @@ def _render_type_key() -> str:
 
 
 def _format_job_status(raw: str, colour: bool) -> str:
-    fg, label, emoji = _JOB_COLOUR_MAP.get(raw, ("white", raw, "❓"))
+    fg, label, emoji = JOB_COLOUR_MAP.get(raw, ("white", raw, "❓"))
     text = f"{emoji} {label}"
     return click.style(text, fg=fg, bold=True) if colour else text
 
@@ -813,7 +790,7 @@ def _format_job_status(raw: str, colour: bool) -> str:
 def _format_weather(score: int | None, colour: bool) -> str:
     if score is None:
         return "—"
-    for threshold, fg, emoji, label in _WEATHER_MAP:
+    for threshold, fg, emoji, label in WEATHER_MAP:
         if score >= threshold:
             text = f"{emoji} {label}"
             return click.style(text, fg=fg, bold=True) if colour else text
@@ -824,22 +801,13 @@ def _weather_word(score: int | None) -> str | None:
     """Semantic weather label (e.g. 'sunny') for a health score, or None."""
     if score is None:
         return None
-    for threshold, _fg, _emoji, label in _WEATHER_MAP:
+    for threshold, _fg, _emoji, label in WEATHER_MAP:
         if score >= threshold:
             return label
     return None
 
 
 # ── build result / time helpers ──────────────────────────────────────────────
-
-# Jenkins build results (distinct vocabulary from job colours): (colour, emoji).
-_BUILD_RESULT_MAP: dict[str, tuple[str, str]] = {
-    "SUCCESS": ("green", "✅"),
-    "FAILURE": ("red", "❌"),
-    "UNSTABLE": ("yellow", "⚠️"),
-    "ABORTED": ("white", "🚫"),
-    "NOT_BUILT": ("white", "🔘"),
-}
 
 
 def _format_build_result(result: str | None, building: bool, colour: bool) -> str:
@@ -849,7 +817,7 @@ def _format_build_result(result: str | None, building: bool, colour: bool) -> st
         return click.style(text, fg="cyan", bold=True) if colour else text
     if result is None:
         return "—"
-    fg, emoji = _BUILD_RESULT_MAP.get(result, ("white", "❓"))
+    fg, emoji = BUILD_RESULT_MAP.get(result, ("white", "❓"))
     text = f"{emoji} {result.title()}"
     return click.style(text, fg=fg, bold=True) if colour else text
 
@@ -926,19 +894,8 @@ def _node_stat_fields(monitor_data: dict) -> dict:
     }
 
 
-_SNIPPET_LEN = 80
-
-_TEST_STATUS_MAP: dict[str, tuple[str, str]] = {
-    "PASSED": ("green", "✅"),
-    "FIXED": ("green", "✅"),
-    "FAILED": ("red", "❌"),
-    "REGRESSION": ("red", "❌"),
-    "SKIPPED": ("yellow", "⏭️"),
-}
-
-
 def _format_test_status(status: str, colour: bool) -> str:
-    fg, emoji = _TEST_STATUS_MAP.get(status.upper(), ("white", "❓"))
+    fg, emoji = TEST_STATUS_MAP.get(status.upper(), ("white", "❓"))
     text = f"{emoji} {status.lower()}"
     return click.style(text, fg=fg, bold=True) if colour else text
 
@@ -947,7 +904,7 @@ def _test_snippet(error: str | None) -> str:
     if not error:
         return ""
     s = error.replace("\n", " ").strip()
-    return s[: _SNIPPET_LEN - 3] + "..." if len(s) > _SNIPPET_LEN else s
+    return s[: SNIPPET_LEN - 3] + "..." if len(s) > SNIPPET_LEN else s
 
 
 def _test_case_records(data: dict, failed_only: bool) -> list[dict]:
@@ -1045,7 +1002,7 @@ def _collect_job_records(
             )
         else:
             color = j.get("color", "grey")
-            status = _JOB_COLOUR_MAP.get(color, ("white", color, "❓"))[1]
+            status = JOB_COLOUR_MAP.get(color, ("white", color, "❓"))[1]
             reports = j.get("healthReport") or []
             health = reports[0].get("score") if reports else None
             records.append(
@@ -1132,7 +1089,7 @@ def _job_tree(ctx: _Ctx, records: list[dict], root_label: str) -> str:
         if rec["type"] == "folder":
             deco = "📁 folder"
         else:
-            emoji = _JOB_COLOUR_MAP.get(rec["color"], ("white", "?", "❓"))[2]
+            emoji = JOB_COLOUR_MAP.get(rec["color"], ("white", "?", "❓"))[2]
             deco = f"{emoji} {rec['status']}"
         return f"{leaf}  {deco}"
 
@@ -1267,26 +1224,6 @@ def job_list(
 
 # ── job trigger ──────────────────────────────────────────────────────────────
 
-# Exit codes for --wait, mirroring the build's verdict (unknown verdicts → 1).
-_WAIT_EXIT_CODES = {"SUCCESS": 0, "FAILURE": 1, "UNSTABLE": 2, "ABORTED": 3}
-_WAIT_TIMEOUT_EXIT = 124
-
-_WAIT_VERDICTS = {
-    "SUCCESS": (
-        "green",
-        "✅ Build #{n} of '{job}' concluded: SUCCESS. Most satisfactory.",
-    ),
-    "UNSTABLE": (
-        "yellow",
-        "⚠️ Build #{n} of '{job}' concluded: UNSTABLE. A somewhat mixed report.",
-    ),
-    "FAILURE": (
-        "red",
-        "❌ Build #{n} of '{job}' concluded: FAILURE. I regret the outcome.",
-    ),
-    "ABORTED": ("red", "🛑 Build #{n} of '{job}' was aborted before completion."),
-}
-
 
 def _check_wait_deadline(deadline: float | None, colour: bool, timeout: float) -> None:
     if deadline is not None and time.monotonic() >= deadline:
@@ -1299,7 +1236,7 @@ def _check_wait_deadline(deadline: float | None, colour: bool, timeout: float) -
             err=True,
             color=colour,
         )
-        sys.exit(_WAIT_TIMEOUT_EXIT)
+        sys.exit(WAIT_TIMEOUT_EXIT)
 
 
 def _wait_for_build(
@@ -1333,7 +1270,7 @@ def _wait_for_build(
                 err=True,
                 color=ctx.colour,
             )
-            sys.exit(_WAIT_EXIT_CODES["ABORTED"])
+            sys.exit(WAIT_EXIT_CODES["ABORTED"])
         number = (item.get("executable") or {}).get("number")
         if number is None:
             why = item.get("why")
@@ -1365,7 +1302,7 @@ def _wait_for_build(
         _check_wait_deadline(deadline, ctx.colour, timeout)
         time.sleep(poll_interval)
 
-    fg, template = _WAIT_VERDICTS.get(
+    fg, template = WAIT_VERDICTS.get(
         result, ("red", "❓ Build #{n} of '{job}' concluded: {result}.")
     )
     click.echo(
@@ -1374,7 +1311,7 @@ def _wait_for_build(
         ),
         color=ctx.colour,
     )
-    sys.exit(_WAIT_EXIT_CODES.get(result, 1))
+    sys.exit(WAIT_EXIT_CODES.get(result, 1))
 
 
 @job.command("trigger")
@@ -1470,13 +1407,6 @@ def job_trigger(
 
 
 # ── builds ───────────────────────────────────────────────────────────────────
-
-# (permalink, display label) shown by `jeeves builds`.
-_BUILD_PERMALINKS = [
-    ("lastBuild", "last"),
-    ("lastSuccessfulBuild", "successful"),
-    ("lastFailedBuild", "failed"),
-]
 
 
 def _build_record(permalink: str, label: str, info: dict | None) -> dict:
@@ -1608,7 +1538,7 @@ def build_summary(
     try:
         records = [
             _build_record(permalink, label, client.build_info(job, permalink))
-            for permalink, label in _BUILD_PERMALINKS
+            for permalink, label in BUILD_PERMALINKS
         ]
     except JenkinsError as exc:
         _butler_error(str(exc), ctx.colour, ctx.quiet)
@@ -1877,9 +1807,6 @@ def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     click.echo(text, nl=False)
 
 
-_FOLLOW_POLL_INTERVAL = 1.0
-
-
 def _follow_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     client = _make_client(ctx)
     start = 0
@@ -1896,7 +1823,7 @@ def _follow_impl(ctx: _Ctx, job: str, build_id: str) -> None:
                 click.echo(text, nl=False)
             if not more_data:
                 break
-            time.sleep(_FOLLOW_POLL_INTERVAL)
+            time.sleep(FOLLOW_POLL_INTERVAL)
     except KeyboardInterrupt:
         click.echo(
             "\n🎩 Very good — I shall cease following.", err=True, color=ctx.colour
@@ -2350,11 +2277,11 @@ def swatch(ctx: _Ctx) -> None:
         ]
         + [
             (f"{icon} {label}", f"Jenkins {label} job")
-            for _, icon, label in _JOB_TYPE_MAP
+            for _, icon, label in JOB_TYPE_MAP
         ]
         + [
             (
-                f"{_JOB_TYPE_FALLBACK[0]} {_JOB_TYPE_FALLBACK[1]}",
+                f"{JOB_TYPE_FALLBACK[0]} {JOB_TYPE_FALLBACK[1]}",
                 "Other / unrecognised",
             ),
         ]
@@ -2366,7 +2293,7 @@ def swatch(ctx: _Ctx) -> None:
 
     # ── Build status ─────────────────────────────────────────────────────────
     lines.append(click.style("Build status", bold=True))
-    for raw, (fg, label, emoji) in _JOB_COLOUR_MAP.items():
+    for raw, (fg, label, emoji) in JOB_COLOUR_MAP.items():
         text = f"{emoji} {label}"
         cell = click.style(text, fg=fg, bold=True) if colour else text
         lines.append(f"  {cell}  ({raw})")
