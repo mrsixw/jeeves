@@ -148,9 +148,9 @@ def check_for_update(show_summary: bool = False):
             return None
         if _parse_version_tuple(latest) > _parse_version_tuple(current):
             msg = (
-                f"🍟 A fresh order is ready! "
-                f"v{current} → v{latest} "
-                f"— update at https://github.com/{_UPDATE_CHECK_REPO}/releases/latest"
+                f"📦 A new edition has arrived: v{current} → v{latest}. "
+                f"Do fetch it from "
+                f"https://github.com/{_UPDATE_CHECK_REPO}/releases/latest."
             )
             if show_summary:
                 body = _read_cached_release_body()
