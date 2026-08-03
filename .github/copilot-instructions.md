@@ -37,6 +37,10 @@ This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, 
 - Other HTTP error: `"Jenkins appears to be in a considerable state of disarray, sir. A {code}. Perhaps a restorative cup of tea is called for."`
 - Generic fallback: `"I'm afraid there's been a spot of bother, sir: {msg}"`
 
+## Work Items
+- **A GitHub issue MUST exist before any work begins.** If the user requests a change and no issue exists yet, create one (or ask the user to create one) before starting implementation. Every branch, commit, and PR must reference an issue number. *Exception*: refinements, feedback iterations, or trivial tweaks on in-flight/undelivered feature branches do not require raising new issues; make changes directly on the active branch. If unsure whether to raise a new issue or continue on the current branch, always pause and ask the user first.
+- Use the `raise-issue` skill to create a properly structured issue, and `start-issue` to branch off it.
+
 ## Automated Workflows
 This repository provides standardized automated workflows for managing issues. All agents must refer to and execute these exact steps:
 - **Start work on an issue:** Follow the steps defined in [.agents/skills/start-issue/SKILL.md](.agents/skills/start-issue/SKILL.md).
