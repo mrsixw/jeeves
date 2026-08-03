@@ -68,3 +68,27 @@ def test_get_latest_version_expired_cache_fetches_api(tmp_path, monkeypatch):
         )
         result = upd.get_latest_version()
     assert result == "2.0.0"
+
+
+def test_check_for_update_returns_butler_styled_message(monkeypatch):
+    monkeypatch.setattr(upd, "pkg_version", lambda name: "1.0.0")
+    monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
+    msg = upd.check_for_update()
+    assert msg.startswith("📦 ") and not msg.startswith("📦  ")
+    assert "sir" not in msg.lower()
+    assert "v1.0.0" in msg and "v2.0.0" in msg
+
+
+def test_check_for_update_no_update_available(monkeypatch):
+    monkeypatch.setattr(upd, "pkg_version", lambda name: "2.0.0")
+    monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
+    assert upd.check_for_update() is None
+
+
+def test_check_for_update_with_summary_appends_release_notes(monkeypatch):
+    monkeypatch.setattr(upd, "pkg_version", lambda name: "1.0.0")
+    monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
+    monkeypatch.setattr(upd, "_read_cached_release_body", lambda: "- Fix A\n- Fix B")
+    msg = upd.check_for_update(show_summary=True)
+    assert "📋 " in msg
+    assert "Fix A" in msg
