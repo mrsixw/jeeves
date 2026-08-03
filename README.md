@@ -22,6 +22,7 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves build summary JOB` | Show last / successful / failed builds |
 | `jeeves build list JOB [--limit N] [--result X] [--param K=V]` | Show recent build history, optionally filtered by parameter |
 | `jeeves build show JOB [BUILD]` | Show a single build, including its parameters and causes |
+| `jeeves build blame JOB [BUILD]` | Show who changed what in a build (culprits and SCM changes) |
 | `jeeves build log JOB [BUILD]` | Show build console output |
 | `jeeves build cancel JOB BUILD` | Cancel a running build |
 | `jeeves build rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |

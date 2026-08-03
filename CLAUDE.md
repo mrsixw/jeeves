@@ -30,6 +30,7 @@
 - `GET /job/{name}/lastBuild/consoleText` — console log (plain text, not JSON)
 - `GET /queue/api/json` — build queue (items[])
 - `POST /job/{name}/{build}/stop` — cancel a running build
+- `GET /job/{name}/{build}/api/json` — build detail; includes `culprits[]` and SCM changes (`changeSets[]` on pipeline builds, single `changeSet` on freestyle)
 - `GET /computer/api/json` — nodes/agents (computer[])
 - `GET /me/api/json` — currently authenticated user (id, fullName)
 - `GET /crumbIssuer/api/json` — CSRF crumb; fetch before first POST, silently skip if unavailable
