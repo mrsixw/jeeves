@@ -102,9 +102,9 @@ jeeves profile remove staging                   # delete a profile
 ## Shell completions
 
 ```bash
-eval "$(jeeves --completion bash)"   # bash
-eval "$(jeeves --completion zsh)"    # zsh
-jeeves --completion fish | source    # fish
+eval "$(jeeves completions bash)"   # bash
+eval "$(jeeves completions zsh)"    # zsh
+jeeves completions fish | source    # fish
 ```
 
 ## Caching

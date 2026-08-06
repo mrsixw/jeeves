@@ -189,16 +189,6 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     shell_complete=_complete_profile,
     help="Named connection profile from config [profiles.NAME] (overrides flat keys).",
 )
-# ── Shell completions ──────────────────────────────────────────────────────
-@click.option(
-    "--completion",
-    "completion_shell",
-    type=click.Choice(["bash", "zsh", "fish"]),
-    default=None,
-    is_eager=True,
-    expose_value=True,
-    help="Print shell completion script for SHELL and exit. Eval in your shell config.",
-)
 # ── Config ─────────────────────────────────────────────────────────────────
 @click.option(
     "--config",
@@ -291,7 +281,6 @@ def main(
     user,
     token,
     profile,
-    completion_shell,
     config_path,
     do_show_config,
     do_init_config,
@@ -312,19 +301,11 @@ def main(
     configure_logging()
     colour = not no_colour
 
-    # ── Shell completion ────────────────────────────────────────────────────
-    if completion_shell:
-        from click.shell_completion import get_completion_class
-
-        comp_cls = get_completion_class(completion_shell)
-        comp = comp_cls(
-            cli=main,
-            ctx_args={},
-            prog_name="jeeves",
-            complete_var="_JEEVES_COMPLETE",
-        )
-        click.echo(comp.source(), nl=False)
-        sys.exit(0)
+    # The completions subcommand must stay usable with no config/profile at
+    # all, so it bypasses config resolution entirely (mirrors the old eager
+    # --completion flag, which short-circuited before this point).
+    if ctx.invoked_subcommand == "completions":
+        return
 
     # ── Config resolution ──────────────────────────────────────────────────
     try:
@@ -429,6 +410,28 @@ def main(
                 )
 
         ctx.call_on_close(_check)
+
+
+# ── completions ────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completions(shell: str) -> None:
+    """Print the shell completion script for SHELL.
+
+    Eval it in your shell config, e.g. ``eval "$(jeeves completions bash)"``.
+    """
+    from click.shell_completion import get_completion_class
+
+    comp_cls = get_completion_class(shell)
+    comp = comp_cls(
+        cli=main,
+        ctx_args={},
+        prog_name="jeeves",
+        complete_var="_JEEVES_COMPLETE",
+    )
+    click.echo(comp.source(), nl=False)
 
 
 # ── status ──────────────────────────────────────────────────────────────────

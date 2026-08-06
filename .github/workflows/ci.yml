@@ -140,11 +140,11 @@ jobs:
           test -f completions/_jeeves
           test -f completions/jeeves.fish
 
-      - name: Verify --completion flag works for all shells
+      - name: Verify completions subcommand works for all shells
         run: |
-          uv run jeeves --completion bash | grep -q "_JEEVES_COMPLETE"
-          uv run jeeves --completion zsh | grep -q "_JEEVES_COMPLETE"
-          uv run jeeves --completion fish | grep -q "_JEEVES_COMPLETE"
+          uv run jeeves completions bash | grep -q "_JEEVES_COMPLETE"
+          uv run jeeves completions zsh | grep -q "_JEEVES_COMPLETE"
+          uv run jeeves completions fish | grep -q "_JEEVES_COMPLETE"
 
   release:
     if: "github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
