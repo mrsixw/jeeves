@@ -134,11 +134,14 @@ jobs:
       - name: Install zsh and fish
         run: sudo apt-get install -y zsh fish
 
-      - name: Verify completion scripts exist
+      - name: Verify completion scripts exist and source cleanly
         run: |
           test -f completions/jeeves.bash
           test -f completions/_jeeves
           test -f completions/jeeves.fish
+          source completions/jeeves.bash && complete -p jeeves
+          zsh -i -c "autoload -Uz compinit && compinit -u && source completions/_jeeves && echo 'zsh ok'"
+          fish -c "source completions/jeeves.fish && echo 'fish ok'"
 
       - name: Verify completions subcommand works for all shells
         run: |
@@ -215,3 +218,17 @@ jobs:
 
       - name: Verify installation
         run: ~/.local/bin/jeeves --version
+
+      - name: Install zsh and fish
+        run: sudo apt-get install -y zsh fish
+
+      - name: Verify bash completions
+        run: |
+          source ~/.local/share/bash-completion/completions/jeeves
+          complete -p jeeves
+
+      - name: Verify zsh completions
+        run: zsh -i -c "autoload -Uz compinit && compinit -u && source ~/.local/share/zsh/site-functions/_jeeves && echo 'zsh ok'"
+
+      - name: Verify fish completions
+        run: fish -c "source ~/.config/fish/completions/jeeves.fish && echo 'fish ok'"
