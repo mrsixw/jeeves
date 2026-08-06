@@ -75,7 +75,7 @@ jeeves status                              # check the Jenkins server
 jeeves job list                            # list jobs and their status
 jeeves --profile staging job list          # target a named [profiles.*] server
 jeeves --format json job list | jq        # structured output for scripting
-eval "$(jeeves --completion bash)"         # shell completions
+eval "$(jeeves completions bash)"          # shell completions
 ```
 
 ## Development

@@ -112,7 +112,7 @@ def test_help():
     result = _invoke("--help")
     assert result.exit_code == 0
     assert "--theme" in result.output
-    assert "--completion" in result.output
+    assert "completions" in result.output
     listed = _listed_commands(result.output)
     assert {"status", "job", "build", "node", "queue", "whoami"} <= listed
 
@@ -131,19 +131,36 @@ def test_bare_invocation_shows_greeting():
 
 
 def test_completion_bash():
-    result = _invoke("--completion", "bash")
+    result = _invoke("completions", "bash")
     assert result.exit_code == 0
     assert "_JEEVES_COMPLETE" in result.output
 
 
 def test_completion_zsh():
-    result = _invoke("--completion", "zsh")
+    result = _invoke("completions", "zsh")
     assert result.exit_code == 0
 
 
 def test_completion_fish():
-    result = _invoke("--completion", "fish")
+    result = _invoke("completions", "fish")
     assert result.exit_code == 0
+
+
+def test_completion_rejects_unknown_shell():
+    result = _invoke("completions", "powershell")
+    assert result.exit_code != 0
+
+
+def test_completion_works_with_invalid_default_profile(tmp_path, monkeypatch):
+    """completions must not require a valid profile/config (mirrors old eager flag)."""
+    from jeeves import config as cfg_mod
+
+    config_path = tmp_path / "jeeves.toml"
+    config_path.write_text('default-profile = "nonexistent"\n')
+    monkeypatch.setattr(cfg_mod, "get_config_dir", lambda: tmp_path)
+    result = _invoke("--config", str(config_path), "completions", "zsh")
+    assert result.exit_code == 0
+    assert "_JEEVES_COMPLETE" in result.output
 
 
 def test_init_config(tmp_path, monkeypatch):
