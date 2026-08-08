@@ -677,6 +677,59 @@ def test_swatch_shows_iconography():
     assert "⛈️" in result.output
 
 
+def test_update_installs_new_release(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod, "perform_update", lambda executable_path: ("updated", "1.0.0", "2.0.0")
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+    assert "refreshed to v2.0.0" in result.output
+
+
+def test_update_already_up_to_date(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: ("up_to_date", "2.0.0", "2.0.0"),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+    assert "Already wearing the latest fashion, v2.0.0" in result.output
+
+
+def test_update_unknown_latest_version_errors(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod, "perform_update", lambda executable_path: ("unknown", "1.0.0", None)
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 1
+    assert "🎩" in result.output
+
+
+def test_update_download_error_reports_detail(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: ("error", "1.0.0", "Permission denied"),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 1
+    assert "Permission denied" in result.output
+
+
+def test_update_does_not_also_run_trailing_update_check(monkeypatch):
+    def fake_perform_update(executable_path):
+        return "updated", "1.0.0", "2.0.0"
+
+    def failing_check_for_update(*args, **kwargs):
+        raise AssertionError("check_for_update should not run after 'update'")
+
+    monkeypatch.setattr(cli_mod, "perform_update", fake_perform_update)
+    monkeypatch.setattr(cli_mod, "check_for_update", failing_check_for_update)
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+
+
 def test_jobs_expand_recurses_into_folders(jenkins):
     _jobs_http(
         jenkins,

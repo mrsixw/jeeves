@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 
 import requests
 
@@ -13,6 +14,9 @@ from .xdg import get_cache_dir
 
 _UPDATE_CHECK_REPO = "mrsixw/jeeves"
 _PACKAGE_NAME = "jeeves"
+_RELEASE_ASSET_URL = (
+    f"https://github.com/{_UPDATE_CHECK_REPO}/releases/latest/download/{_PACKAGE_NAME}"
+)
 
 _CACHE_DIR = get_cache_dir()
 _CACHE_TTL_SECONDS = 86400  # 24 hours
@@ -163,3 +167,36 @@ def check_for_update(show_summary: bool = False):
     except PackageNotFoundError as exc:
         logger.debug("package_not_found error=%r", str(exc))
         return None
+
+
+def perform_update(executable_path) -> tuple[str, str, str | None]:
+    """Download the latest jeeves release and replace executable_path in place.
+
+    Returns (status, current_version, detail):
+      - "updated": executable_path now holds the release named by detail.
+      - "up_to_date": current_version already matches or exceeds detail (latest).
+      - "unknown": the latest version could not be determined; detail is None.
+      - "error": the download or install failed; detail carries the error message.
+    """
+    current = pkg_version(_PACKAGE_NAME)
+    latest = get_latest_version()
+    if not latest:
+        return "unknown", current, None
+    if _parse_version_tuple(latest) <= _parse_version_tuple(current):
+        return "up_to_date", current, latest
+
+    executable_path = Path(executable_path)
+    tmp_path = executable_path.with_name(executable_path.name + ".new")
+    try:
+        resp = requests.get(_RELEASE_ASSET_URL, timeout=30, stream=True)
+        resp.raise_for_status()
+        with open(tmp_path, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=65536):
+                fh.write(chunk)
+        tmp_path.chmod(0o755)
+        os.replace(tmp_path, executable_path)
+    except (OSError, requests.exceptions.RequestException) as exc:
+        logger.debug("perform_update_failed error=%r", str(exc))
+        tmp_path.unlink(missing_ok=True)
+        return "error", current, str(exc)
+    return "updated", current, latest
