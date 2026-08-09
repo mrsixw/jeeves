@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import random
+import shutil
 import sys
 import time
 import webbrowser
@@ -33,7 +34,7 @@ from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
-from .updater import check_for_update
+from .updater import UpdateStatus, check_for_update, perform_update
 
 _ENVVAR_PREFIX = "JEEVES"
 _BUTLER_ITEMS = ["🎩", "🥂", "🤵", "📋", "🫗"]
@@ -400,7 +401,8 @@ def main(
         return
 
     # ── Update check (runs after the subcommand via close callback) ────────
-    if not no_update_check:
+    # Skipped for 'update' itself — it already reports the outcome directly.
+    if not no_update_check and ctx.invoked_subcommand != "update":
 
         def _check() -> None:
             msg = check_for_update()
@@ -2376,6 +2378,54 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
+
+
+# ── update ───────────────────────────────────────────────────────────────────
+
+
+def _current_executable_path() -> str:
+    """Resolve the path of the currently running jeeves executable."""
+    return shutil.which("jeeves") or sys.argv[0]
+
+
+@main.command()
+@pass_ctx
+def update(ctx: _Ctx) -> None:
+    """Download and install the latest jeeves release over the running executable."""
+    click.echo(
+        click.style("🔍 Checking for a newer edition...", fg="cyan"),
+        err=True,
+        color=ctx.colour,
+    )
+    status, current, detail = perform_update(_current_executable_path())
+
+    if status is UpdateStatus.UNKNOWN:
+        _butler_error(
+            "I could not reach GitHub to check for the latest release, sir",
+            ctx.colour,
+        )
+        sys.exit(1)
+    if status is UpdateStatus.ERROR:
+        _butler_error(detail, ctx.colour)
+        sys.exit(1)
+    if status is UpdateStatus.UP_TO_DATE:
+        click.echo(
+            click.style(
+                f"✅ Certainly. Already wearing the latest fashion, v{current}.",
+                fg="green",
+            ),
+            err=True,
+            color=ctx.colour,
+        )
+        return
+
+    click.echo(
+        click.style(
+            f"✅ Certainly. jeeves has been refreshed to v{detail}.", fg="green"
+        ),
+        err=True,
+        color=ctx.colour,
+    )
 
 
 # ── deprecated aliases ────────────────────────────────────────────────────────
