@@ -24,6 +24,7 @@ jeeves = "jeeves.cli:main"
 
 [project.optional-dependencies]
 test = [
+  "pyfakefs",
   "pytest",
   "requests-mock",
 ]
@@ -38,6 +39,7 @@ build = [
 dev = [
   "black",
   "click-man",
+  "pyfakefs",
   "pytest",
   "requests-mock",
   "ruff",

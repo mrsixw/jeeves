@@ -8,6 +8,7 @@ from conftest import JENKINS_URL, api, url
 
 from jeeves import cli as cli_mod
 from jeeves.cli import _hyperlink, main
+from jeeves.updater import UpdateStatus
 
 
 def _invoke(*args, **kwargs):
@@ -679,7 +680,9 @@ def test_swatch_shows_iconography():
 
 def test_update_installs_new_release(monkeypatch):
     monkeypatch.setattr(
-        cli_mod, "perform_update", lambda executable_path: ("updated", "1.0.0", "2.0.0")
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.UPDATED, "1.0.0", "2.0.0"),
     )
     result = _invoke("--no-colour", "update")
     assert result.exit_code == 0
@@ -690,7 +693,7 @@ def test_update_already_up_to_date(monkeypatch):
     monkeypatch.setattr(
         cli_mod,
         "perform_update",
-        lambda executable_path: ("up_to_date", "2.0.0", "2.0.0"),
+        lambda executable_path: (UpdateStatus.UP_TO_DATE, "2.0.0", "2.0.0"),
     )
     result = _invoke("--no-colour", "update")
     assert result.exit_code == 0
@@ -699,7 +702,9 @@ def test_update_already_up_to_date(monkeypatch):
 
 def test_update_unknown_latest_version_errors(monkeypatch):
     monkeypatch.setattr(
-        cli_mod, "perform_update", lambda executable_path: ("unknown", "1.0.0", None)
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.UNKNOWN, "1.0.0", None),
     )
     result = _invoke("--no-colour", "update")
     assert result.exit_code == 1
@@ -710,7 +715,7 @@ def test_update_download_error_reports_detail(monkeypatch):
     monkeypatch.setattr(
         cli_mod,
         "perform_update",
-        lambda executable_path: ("error", "1.0.0", "Permission denied"),
+        lambda executable_path: (UpdateStatus.ERROR, "1.0.0", "Permission denied"),
     )
     result = _invoke("--no-colour", "update")
     assert result.exit_code == 1
@@ -719,7 +724,7 @@ def test_update_download_error_reports_detail(monkeypatch):
 
 def test_update_does_not_also_run_trailing_update_check(monkeypatch):
     def fake_perform_update(executable_path):
-        return "updated", "1.0.0", "2.0.0"
+        return UpdateStatus.UPDATED, "1.0.0", "2.0.0"
 
     def failing_check_for_update(*args, **kwargs):
         raise AssertionError("check_for_update should not run after 'update'")

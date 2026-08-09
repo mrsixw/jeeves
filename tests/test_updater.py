@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import pytest
 import requests_mock as req_mock
 
 from jeeves import updater as upd
@@ -94,66 +96,72 @@ def test_check_for_update_with_summary_appends_release_notes(monkeypatch):
     assert "Fix A" in msg
 
 
-def test_perform_update_up_to_date_leaves_executable_untouched(monkeypatch, tmp_path):
+_INSTALL_DIR = Path("/usr/local/bin")
+
+
+@pytest.fixture
+def installed_exe(fs):
+    """A fake installed jeeves binary on pyfakefs' filesystem."""
+    fs.create_file(_INSTALL_DIR / "jeeves", contents="old binary")
+    return _INSTALL_DIR / "jeeves"
+
+
+def test_perform_update_up_to_date_leaves_executable_untouched(
+    monkeypatch, installed_exe
+):
     monkeypatch.setattr(upd, "pkg_version", lambda name: "2.0.0")
     monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
-    exe = tmp_path / "jeeves"
-    exe.write_text("old binary")
 
-    status, current, detail = upd.perform_update(exe)
+    status, current, detail = upd.perform_update(installed_exe)
 
-    assert status == "up_to_date"
+    assert status is upd.UpdateStatus.UP_TO_DATE
     assert current == "2.0.0"
     assert detail == "2.0.0"
-    assert exe.read_text() == "old binary"
+    assert installed_exe.read_text() == "old binary"
 
 
-def test_perform_update_unknown_when_latest_cannot_be_determined(monkeypatch, tmp_path):
+def test_perform_update_unknown_when_latest_cannot_be_determined(
+    monkeypatch, installed_exe
+):
     monkeypatch.setattr(upd, "pkg_version", lambda name: "1.0.0")
     monkeypatch.setattr(upd, "get_latest_version", lambda: None)
-    exe = tmp_path / "jeeves"
-    exe.write_text("old binary")
 
-    status, current, detail = upd.perform_update(exe)
+    status, current, detail = upd.perform_update(installed_exe)
 
-    assert status == "unknown"
+    assert status is upd.UpdateStatus.UNKNOWN
     assert current == "1.0.0"
     assert detail is None
-    assert exe.read_text() == "old binary"
+    assert installed_exe.read_text() == "old binary"
 
 
-def test_perform_update_downloads_and_replaces_executable(monkeypatch, tmp_path):
+def test_perform_update_downloads_and_replaces_executable(monkeypatch, installed_exe):
     monkeypatch.setattr(upd, "pkg_version", lambda name: "1.0.0")
     monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
-    exe = tmp_path / "jeeves"
-    exe.write_text("old binary")
 
     with req_mock.Mocker() as m:
         m.get(upd._RELEASE_ASSET_URL, content=b"new binary content")
-        status, current, detail = upd.perform_update(exe)
+        status, current, detail = upd.perform_update(installed_exe)
 
-    assert status == "updated"
+    assert status is upd.UpdateStatus.UPDATED
     assert current == "1.0.0"
     assert detail == "2.0.0"
-    assert exe.read_bytes() == b"new binary content"
-    assert exe.stat().st_mode & 0o111
-    assert not (tmp_path / "jeeves.new").exists()
+    assert installed_exe.read_bytes() == b"new binary content"
+    assert installed_exe.stat().st_mode & 0o111
+    assert not (_INSTALL_DIR / "jeeves.new").exists()
 
 
 def test_perform_update_download_failure_leaves_executable_untouched(
-    monkeypatch, tmp_path
+    monkeypatch, installed_exe
 ):
     monkeypatch.setattr(upd, "pkg_version", lambda name: "1.0.0")
     monkeypatch.setattr(upd, "get_latest_version", lambda: "2.0.0")
-    exe = tmp_path / "jeeves"
-    exe.write_text("old binary")
 
     with req_mock.Mocker() as m:
         m.get(upd._RELEASE_ASSET_URL, status_code=500)
-        status, current, detail = upd.perform_update(exe)
+        status, current, detail = upd.perform_update(installed_exe)
 
-    assert status == "error"
+    assert status is upd.UpdateStatus.ERROR
     assert current == "1.0.0"
     assert detail
-    assert exe.read_text() == "old binary"
-    assert not (tmp_path / "jeeves.new").exists()
+    assert installed_exe.read_text() == "old binary"
+    assert not (_INSTALL_DIR / "jeeves.new").exists()

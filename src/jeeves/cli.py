@@ -34,7 +34,7 @@ from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
-from .updater import check_for_update, perform_update
+from .updater import UpdateStatus, check_for_update, perform_update
 
 _ENVVAR_PREFIX = "JEEVES"
 _BUTLER_ITEMS = ["🎩", "🥂", "🤵", "📋", "🫗"]
@@ -2399,16 +2399,16 @@ def update(ctx: _Ctx) -> None:
     )
     status, current, detail = perform_update(_current_executable_path())
 
-    if status == "unknown":
+    if status is UpdateStatus.UNKNOWN:
         _butler_error(
             "I could not reach GitHub to check for the latest release, sir",
             ctx.colour,
         )
         sys.exit(1)
-    if status == "error":
+    if status is UpdateStatus.ERROR:
         _butler_error(detail, ctx.colour)
         sys.exit(1)
-    if status == "up_to_date":
+    if status is UpdateStatus.UP_TO_DATE:
         click.echo(
             click.style(
                 f"✅ Certainly. Already wearing the latest fashion, v{current}.",
