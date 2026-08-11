@@ -31,6 +31,7 @@
 - `GET /job/{name}/lastBuild/consoleText` — console log (plain text, not JSON)
 - `GET /queue/api/json` — build queue (items[])
 - `POST /job/{name}/{build}/stop` — cancel a running build
+- `GET /job/{name}/{build}/api/json` — build detail; includes `culprits[]` and SCM changes (`changeSets[]` on pipeline builds, single `changeSet` on freestyle)
 - `GET /computer/api/json` — nodes/agents (computer[])
 - `GET /me/api/json` — currently authenticated user (id, fullName)
 - `GET /crumbIssuer/api/json` — CSRF crumb; fetch before first POST, silently skip if unavailable
@@ -62,6 +63,10 @@ This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, 
 - 404 Not Found: `"I searched the premises most thoroughly, sir, but the requested resource could not be found. A 404. It has vanished like Bertie's good intentions."`
 - Other HTTP error: `"Jenkins appears to be in a considerable state of disarray, sir. A {code}. Perhaps a restorative cup of tea is called for."`
 - Generic fallback: `"I'm afraid there's been a spot of bother, sir: {msg}"`
+
+## Work Items
+- **A GitHub issue MUST exist before any work begins.** If the user requests a change and no issue exists yet, create one (or ask the user to create one) before starting implementation. Every branch, commit, and PR must reference an issue number. *Exception*: refinements, feedback iterations, or trivial tweaks on in-flight/undelivered feature branches do not require raising new issues; make changes directly on the active branch. If unsure whether to raise a new issue or continue on the current branch, always pause and ask the user first.
+- Use the `raise-issue` skill to create a properly structured issue, and `start-issue` to branch off it.
 
 ## Automated Workflows
 This repository provides standardized automated workflows for managing issues. All agents must refer to and execute these exact steps:

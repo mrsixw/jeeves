@@ -158,6 +158,30 @@ class JenkinsClient:
                 return None
             raise
 
+    def changes(self, job: str, build: int | str = "lastBuild") -> dict | None:
+        """Fetch a build's culprits and SCM changes by number or permalink.
+
+        Uses a ``tree`` selector to pull only the blame-relevant fields.
+        Pipeline builds report changes under ``changeSets[]``; freestyle
+        builds under a single ``changeSet`` — both are requested so callers
+        see whichever the job type provides. Returns ``None`` when the build
+        or permalink does not exist (404).
+        """
+        path = f"{_normalize_jenkins_path(job)}/{build}"
+        item_fields = (
+            "items[commitId,msg,timestamp,authorEmail,author[fullName,absoluteUrl]]"
+        )
+        tree = (
+            "number,url,culprits[fullName,absoluteUrl],"
+            f"changeSets[{item_fields}],changeSet[{item_fields}]"
+        )
+        try:
+            return self._get(path, params={"tree": tree})
+        except JenkinsError as exc:
+            if "Jenkins returned 404" in str(exc):
+                return None
+            raise
+
     def build(self, job: str, params: dict | None = None) -> int | None:
         """Trigger a build.
 

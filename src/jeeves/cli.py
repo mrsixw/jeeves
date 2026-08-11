@@ -6,7 +6,9 @@ utmost discretion and efficiency.
 
 from __future__ import annotations
 
+import functools
 import random
+import shutil
 import sys
 import time
 import webbrowser
@@ -52,7 +54,7 @@ from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
-from .updater import check_for_update
+from .updater import UpdateStatus, check_for_update, perform_update
 
 
 @dataclass
@@ -209,16 +211,6 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     shell_complete=_complete_profile,
     help="Named connection profile from config [profiles.NAME] (overrides flat keys).",
 )
-# ── Shell completions ──────────────────────────────────────────────────────
-@click.option(
-    "--completion",
-    "completion_shell",
-    type=click.Choice(["bash", "zsh", "fish"]),
-    default=None,
-    is_eager=True,
-    expose_value=True,
-    help="Print shell completion script for SHELL and exit. Eval in your shell config.",
-)
 # ── Config ─────────────────────────────────────────────────────────────────
 @click.option(
     "--config",
@@ -318,7 +310,6 @@ def main(
     user,
     token,
     profile,
-    completion_shell,
     config_path,
     do_show_config,
     do_init_config,
@@ -340,19 +331,11 @@ def main(
     configure_logging()
     colour = not no_colour
 
-    # ── Shell completion ────────────────────────────────────────────────────
-    if completion_shell:
-        from click.shell_completion import get_completion_class
-
-        comp_cls = get_completion_class(completion_shell)
-        comp = comp_cls(
-            cli=main,
-            ctx_args={},
-            prog_name="jeeves",
-            complete_var="_JEEVES_COMPLETE",
-        )
-        click.echo(comp.source(), nl=False)
-        sys.exit(0)
+    # The completions subcommand must stay usable with no config/profile at
+    # all, so it bypasses config resolution entirely (mirrors the old eager
+    # --completion flag, which short-circuited before this point).
+    if ctx.invoked_subcommand == "completions":
+        return
 
     # ── Config resolution ──────────────────────────────────────────────────
     try:
@@ -453,7 +436,8 @@ def main(
         return
 
     # ── Update check (runs after the subcommand via close callback) ────────
-    if not no_update_check:
+    # Skipped for 'update' itself — it already reports the outcome directly.
+    if not no_update_check and ctx.invoked_subcommand != "update":
 
         def _check() -> None:
             if not quiet:
@@ -464,6 +448,28 @@ def main(
                     )
 
         ctx.call_on_close(_check)
+
+
+# ── completions ────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completions(shell: str) -> None:
+    """Print the shell completion script for SHELL.
+
+    Eval it in your shell config, e.g. ``eval "$(jeeves completions bash)"``.
+    """
+    from click.shell_completion import get_completion_class
+
+    comp_cls = get_completion_class(shell)
+    comp = comp_cls(
+        cli=main,
+        ctx_args={},
+        prog_name="jeeves",
+        complete_var="_JEEVES_COMPLETE",
+    )
+    click.echo(comp.source(), nl=False)
 
 
 # ── status ──────────────────────────────────────────────────────────────────
@@ -512,12 +518,28 @@ def status(ctx: _Ctx) -> None:
 # ── noun groups (job / build / node) ─────────────────────────────────────────
 
 
+class _BuildGroup(click.Group):
+    """`build` is a noun group, but the legacy verb `jeeves build JOB
+    [--param K=V]` still works: an unknown first token falls back to the
+    hidden deprecated trigger command; real subcommands take priority."""
+
+    def resolve_command(self, ctx, args):
+        if (
+            args
+            and not args[0].startswith("-")
+            and self.get_command(ctx, args[0]) is None
+        ):
+            # Return full `args` (not args[1:]) so the token becomes JOB.
+            return _LEGACY_BUILD_VERB.name, _LEGACY_BUILD_VERB, args
+        return super().resolve_command(ctx, args)
+
+
 @main.group()
 def job() -> None:
     """Work with Jenkins jobs: list, parameters, trigger."""
 
 
-@main.group()
+@main.group(cls=_BuildGroup)
 def build() -> None:
     """Inspect and manage a job's builds."""
 
@@ -1653,6 +1675,114 @@ def build_show(
     )
 
 
+# ── build blame ──────────────────────────────────────────────────────────────
+
+
+def _change_records(info: dict) -> list[dict]:
+    """Flatten a build's SCM changes into semantic change records.
+
+    Pipeline builds carry ``changeSets[]``; freestyle builds a single
+    ``changeSet`` object. Each record is the JSON contract for one commit:
+    ``{commit, author, author_url, email, timestamp, message}``.
+    """
+    change_sets = info.get("changeSets")
+    if change_sets is None:
+        single = info.get("changeSet")
+        change_sets = [single] if isinstance(single, dict) else []
+    records = []
+    for cs in change_sets:
+        for item in cs.get("items", []):
+            author = item.get("author") or {}
+            records.append(
+                {
+                    "commit": item.get("commitId"),
+                    "author": author.get("fullName"),
+                    "author_url": author.get("absoluteUrl"),
+                    "email": item.get("authorEmail"),
+                    "timestamp": item.get("timestamp"),
+                    "message": item.get("msg") or "",
+                }
+            )
+    return records
+
+
+def _culprit_names(info: dict) -> list[str]:
+    """Names of the users Jenkins holds responsible for a build's changes."""
+    return [c["fullName"] for c in info.get("culprits", []) if c.get("fullName")]
+
+
+def _blame_columns(ctx: _Ctx) -> list[Column]:
+    def commit_table(r: dict, i: int) -> str:
+        text = (r["commit"] or "")[:7] or "—"
+        if ctx.colour and ctx.seasonal_colours:
+            text = apply_seasonal_colour(text, i, calendar=ctx.seasonal_calendar)
+        return text
+
+    def author_table(r: dict, _i: int) -> str:
+        name = r["author"] or "—"
+        if r["author_url"]:
+            name = _hyperlink(name, r["author_url"], ctx.colour)
+        return name
+
+    return [
+        Column("commit", "Commit", table=commit_table),
+        Column(
+            "author", "Author", table=author_table, plain=lambda r: r["author"] or ""
+        ),
+        Column(
+            "timestamp",
+            "When",
+            table=lambda r, _i: _relative_time(r["timestamp"]),
+            plain=lambda r: _relative_time(r["timestamp"]),
+        ),
+        Column("message", "Message"),
+    ]
+
+
+@build.command("blame")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@pass_ctx
+def build_blame(ctx: _Ctx, job: str, build_id: str) -> None:
+    """Show who changed what in a build (culprits and SCM changes).
+
+    JOB is the job name; BUILD is a build number or permalink
+    (default: lastBuild — try lastFailedBuild for the latest breakage).
+    """
+    client = _make_client(ctx)
+    try:
+        info = client.changes(job, build_id)
+    except JenkinsError as exc:
+        _butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+
+    if info is None:
+        _emit(
+            ctx,
+            [],
+            _blame_columns(ctx),
+            header="",
+            empty=f"🤷 I could find no build '{build_id}' for '{job}'.",
+        )
+        return
+
+    records = _change_records(info)
+    number = info.get("number")
+    label = f"#{number}" if number is not None else build_id
+    culprits = _culprit_names(info)
+    suffix = f" Persons of interest: {', '.join(culprits)}." if culprits else ""
+    _emit(
+        ctx,
+        records,
+        _blame_columns(ctx),
+        header=f"🕵️ The changes aboard build {label} of '{job}'.{suffix}",
+        empty=(
+            f"🧾 Not a single change aboard build {label} of '{job}'. The ledger "
+            f"is quite blank — an automated affair, one presumes.{suffix}"
+        ),
+    )
+
+
 # ── params ───────────────────────────────────────────────────────────────────
 
 
@@ -2350,3 +2480,161 @@ def swatch(ctx: _Ctx) -> None:
     lines.append(f"  {'Holi 🎨 (spring)':<{col_w2}}  {holi}")
 
     click.echo("\n".join(lines), color=colour)
+
+
+# ── update ───────────────────────────────────────────────────────────────────
+
+
+def _current_executable_path() -> str:
+    """Resolve the path of the currently running jeeves executable."""
+    return shutil.which("jeeves") or sys.argv[0]
+
+
+@main.command()
+@pass_ctx
+def update(ctx: _Ctx) -> None:
+    """Download and install the latest jeeves release over the running executable."""
+    click.echo(
+        click.style("🔍 Checking for a newer edition...", fg="cyan"),
+        err=True,
+        color=ctx.colour,
+    )
+    status, current, detail = perform_update(_current_executable_path())
+
+    if status is UpdateStatus.UNKNOWN:
+        _butler_error(
+            "I could not reach GitHub to check for the latest release, sir",
+            ctx.colour,
+        )
+        sys.exit(1)
+    if status is UpdateStatus.ERROR:
+        _butler_error(detail, ctx.colour)
+        sys.exit(1)
+    if status is UpdateStatus.UP_TO_DATE:
+        click.echo(
+            click.style(
+                f"✅ Certainly. Already wearing the latest fashion, v{current}.",
+                fg="green",
+            ),
+            err=True,
+            color=ctx.colour,
+        )
+        return
+
+    click.echo(
+        click.style(
+            f"✅ Certainly. jeeves has been refreshed to v{detail}.", fg="green"
+        ),
+        err=True,
+        color=ctx.colour,
+    )
+
+
+# ── deprecated aliases ────────────────────────────────────────────────────────
+# The pre-noun-group flat commands keep working for one release, hidden from
+# --help, each printing a gentle notice pointing at the new spelling.
+
+
+def _deprecation_notice(old: str, new: str) -> None:
+    ctx = click.get_current_context(silent=True)
+    obj = ctx.find_object(_Ctx) if ctx else None
+    colour = obj.colour if obj else True
+    click.echo(
+        click.style(
+            f"🎩 A gentle word: 'jeeves {old}' has moved to 'jeeves {new}'. "
+            "The old form retires in a future release.",
+            fg="yellow",
+        ),
+        err=True,
+        color=colour,
+    )
+
+
+def _deprecated_alias(
+    old: str, new: str, target: click.Command, *, name: str
+) -> click.Command:
+    """A hidden Command that prints a deprecation notice then runs ``target``.
+
+    The alias shares ``target``'s Param objects — safe, since parse state lives
+    on the Context, not the Param; do not mutate params in place on either.
+    """
+
+    def _callback(*args, **kwargs):
+        _deprecation_notice(old, new)
+        return target.callback(*args, **kwargs)
+
+    functools.update_wrapper(_callback, target.callback)
+    return click.Command(
+        name=name,
+        params=list(target.params),
+        callback=_callback,
+        help=target.help,
+        hidden=True,
+    )
+
+
+main.add_command(_deprecated_alias("jobs", "job list", job_list, name="jobs"))
+main.add_command(
+    _deprecated_alias("params JOB", "job params JOB", job_params, name="params")
+)
+main.add_command(
+    _deprecated_alias("rebuild JOB", "build rebuild JOB", build_rebuild, name="rebuild")
+)
+main.add_command(_deprecated_alias("nodes", "node list", node_list, name="nodes"))
+
+# Reachable only via _BuildGroup's fallback (never registered on main): keeps
+# the legacy `jeeves build JOB [--param K=V]` trigger form working.
+_LEGACY_BUILD_VERB = _deprecated_alias(
+    "build JOB", "job trigger JOB", job_trigger, name="build"
+)
+
+_builds_alias = click.Group("builds", hidden=True, help="Deprecated: use 'build'.")
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds summary JOB", "build summary JOB", build_summary, name="summary"
+    )
+)
+_builds_alias.add_command(
+    _deprecated_alias("builds list JOB", "build list JOB", build_list, name="list")
+)
+_builds_alias.add_command(
+    _deprecated_alias(
+        "builds show JOB [BUILD]", "build show JOB [BUILD]", build_show, name="show"
+    )
+)
+main.add_command(_builds_alias)
+
+
+# `log` and `cancel` changed shape (--build option → positional BUILD), so
+# their aliases are hand-written with the old signatures frozen.
+@main.command("log", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    default="lastBuild",
+    metavar="N",
+    help="Build number (default: lastBuild).",
+)
+@pass_ctx
+def legacy_log(ctx: _Ctx, job: str, build_id: str) -> None:
+    """Deprecated: use 'jeeves build log'."""
+    _deprecation_notice("log JOB --build N", "build log JOB [BUILD]")
+    _log_impl(ctx, job, build_id)
+
+
+@main.command("cancel", hidden=True)
+@click.argument("job")
+@click.option(
+    "--build",
+    "build_id",
+    required=True,
+    type=int,
+    metavar="N",
+    help="Build number to cancel.",
+)
+@pass_ctx
+def legacy_cancel(ctx: _Ctx, job: str, build_id: int) -> None:
+    """Deprecated: use 'jeeves build cancel'."""
+    _deprecation_notice("cancel JOB --build N", "build cancel JOB BUILD")
+    _cancel_impl(ctx, job, build_id)

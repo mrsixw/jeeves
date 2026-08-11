@@ -212,13 +212,15 @@ Config key: `cache-ttl = "300"`
 
 ## Shell completions
 
-### `--completion [bash|zsh|fish]`
+### `completions [bash|zsh|fish]`
 
-Print the shell completion script and exit. Eval in your shell config:
+Print the shell completion script. Eval in your shell config:
 
 ```bash
-eval "$(jeeves --completion bash)"
+eval "$(jeeves completions bash)"
 ```
+
+Works with no config file or Jenkins connection set up.
 
 ## Other
 

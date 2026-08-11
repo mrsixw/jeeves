@@ -22,6 +22,7 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves build summary JOB` | Show last / successful / failed builds |
 | `jeeves build list JOB [--limit N] [--result X] [--param K=V]` | Show recent build history, optionally filtered by parameter |
 | `jeeves build show JOB [BUILD]` | Show a single build, including its parameters and causes |
+| `jeeves build blame JOB [BUILD]` | Show who changed what in a build (culprits and SCM changes) |
 | `jeeves build log JOB [BUILD]` | Show build console output |
 | `jeeves build test-report JOB [BUILD] [--failed-only]` | Show the JUnit test report for a build |
 | `jeeves build cancel JOB BUILD` | Cancel a running build |
@@ -71,7 +72,7 @@ jeeves status                              # check the Jenkins server
 jeeves job list                            # list jobs and their status
 jeeves --profile staging job list          # target a named [profiles.*] server
 jeeves --format json job list | jq        # structured output for scripting
-eval "$(jeeves --completion bash)"         # shell completions
+eval "$(jeeves completions bash)"          # shell completions
 ```
 
 ## Development

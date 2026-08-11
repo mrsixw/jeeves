@@ -4,12 +4,13 @@ from urllib.parse import parse_qs
 
 import requests
 from click.testing import CliRunner
-from conftest import api, url
+from conftest import JENKINS_URL, api, url
 
 from jeeves import cli as cli_mod
 from jeeves import jenkins as jenkins_mod
 from jeeves.cli import _hyperlink, main
 from jeeves.jenkins import JenkinsError
+from jeeves.updater import UpdateStatus
 
 
 def _invoke(*args, **kwargs):
@@ -114,7 +115,7 @@ def test_help():
     result = _invoke("--help")
     assert result.exit_code == 0
     assert "--theme" in result.output
-    assert "--completion" in result.output
+    assert "completions" in result.output
     listed = _listed_commands(result.output)
     assert {"status", "job", "build", "node", "queue", "whoami"} <= listed
 
@@ -133,19 +134,36 @@ def test_bare_invocation_shows_greeting():
 
 
 def test_completion_bash():
-    result = _invoke("--completion", "bash")
+    result = _invoke("completions", "bash")
     assert result.exit_code == 0
     assert "_JEEVES_COMPLETE" in result.output
 
 
 def test_completion_zsh():
-    result = _invoke("--completion", "zsh")
+    result = _invoke("completions", "zsh")
     assert result.exit_code == 0
 
 
 def test_completion_fish():
-    result = _invoke("--completion", "fish")
+    result = _invoke("completions", "fish")
     assert result.exit_code == 0
+
+
+def test_completion_rejects_unknown_shell():
+    result = _invoke("completions", "powershell")
+    assert result.exit_code != 0
+
+
+def test_completion_works_with_invalid_default_profile(tmp_path, monkeypatch):
+    """completions must not require a valid profile/config (mirrors old eager flag)."""
+    from jeeves import config as cfg_mod
+
+    config_path = tmp_path / "jeeves.toml"
+    config_path.write_text('default-profile = "nonexistent"\n')
+    monkeypatch.setattr(cfg_mod, "get_config_dir", lambda: tmp_path)
+    result = _invoke("--config", str(config_path), "completions", "zsh")
+    assert result.exit_code == 0
+    assert "_JEEVES_COMPLETE" in result.output
 
 
 def test_init_config(tmp_path, monkeypatch):
@@ -662,6 +680,63 @@ def test_swatch_shows_iconography():
     assert "⛈️" in result.output
 
 
+def test_update_installs_new_release(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.UPDATED, "1.0.0", "2.0.0"),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+    assert "refreshed to v2.0.0" in result.output
+
+
+def test_update_already_up_to_date(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.UP_TO_DATE, "2.0.0", "2.0.0"),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+    assert "Already wearing the latest fashion, v2.0.0" in result.output
+
+
+def test_update_unknown_latest_version_errors(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.UNKNOWN, "1.0.0", None),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 1
+    assert "🎩" in result.output
+
+
+def test_update_download_error_reports_detail(monkeypatch):
+    monkeypatch.setattr(
+        cli_mod,
+        "perform_update",
+        lambda executable_path: (UpdateStatus.ERROR, "1.0.0", "Permission denied"),
+    )
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 1
+    assert "Permission denied" in result.output
+
+
+def test_update_does_not_also_run_trailing_update_check(monkeypatch):
+    def fake_perform_update(executable_path):
+        return UpdateStatus.UPDATED, "1.0.0", "2.0.0"
+
+    def failing_check_for_update(*args, **kwargs):
+        raise AssertionError("check_for_update should not run after 'update'")
+
+    monkeypatch.setattr(cli_mod, "perform_update", fake_perform_update)
+    monkeypatch.setattr(cli_mod, "check_for_update", failing_check_for_update)
+    result = _invoke("--no-colour", "update")
+    assert result.exit_code == 0
+
+
 def test_jobs_expand_recurses_into_folders(jenkins):
     _jobs_http(
         jenkins,
@@ -1039,6 +1114,125 @@ def test_builds_show_exposes_params_and_causes_json(jenkins):
     assert data[0]["params"] == {"CHANGE_ID": "12345"}
     assert data[0]["causes"][0]["upstreamProject"] == "foo"
     assert data[0]["causes"][0]["upstreamBuild"] == 3
+
+
+# ── build blame ──────────────────────────────────────────────────────────────
+
+_BLAME_PIPELINE_BUILD = {
+    "number": 12,
+    "culprits": [
+        {"fullName": "Bertie Wooster", "absoluteUrl": f"{JENKINS_URL}/user/bertie/"}
+    ],
+    "changeSets": [
+        {
+            "items": [
+                {
+                    "commitId": "deadbeefcafe1234",
+                    "msg": "fix the boiler",
+                    "timestamp": 1700000000000,
+                    "authorEmail": "bertie@drones.example",
+                    "author": {
+                        "fullName": "Bertie Wooster",
+                        "absoluteUrl": f"{JENKINS_URL}/user/bertie/",
+                    },
+                }
+            ]
+        }
+    ],
+}
+
+
+def test_build_blame_lists_changes_and_culprits(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "deadbee" in result.stdout  # abbreviated commit id
+    assert "deadbeefcafe1234" not in result.stdout
+    assert "Bertie Wooster" in result.stdout
+    assert "fix the boiler" in result.stdout
+    assert "build #12 of 'deploy'" in result.stderr
+    assert "Persons of interest: Bertie Wooster" in result.stderr
+
+
+def test_build_blame_requests_blame_tree(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    tree = jenkins.last_request.qs["tree"][0].lower()
+    assert "culprits[" in tree
+    assert "changesets[" in tree
+
+
+def test_build_blame_freestyle_changeset_shape(jenkins):
+    _build_info_http(
+        jenkins,
+        {
+            "5": {
+                "number": 5,
+                "culprits": [],
+                "changeSet": {
+                    "items": [
+                        {
+                            "commitId": "0123abcd",
+                            "msg": "polish the silver",
+                            "author": {"fullName": "Jeeves"},
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "blame", "deploy", "5"
+    )
+    assert result.exit_code == 0
+    assert "polish the silver" in result.stdout
+    assert "Jeeves" in result.stdout
+    assert "Persons of interest" not in result.stderr
+
+
+def test_build_blame_empty_changeset(jenkins):
+    _build_info_http(
+        jenkins, {"lastBuild": {"number": 3, "culprits": [], "changeSets": []}}
+    )
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "Not a single change aboard build #3" in result.stderr
+
+
+def test_build_blame_no_scm_build(jenkins):
+    # A job with no SCM at all: neither changeSet nor changeSets in the JSON.
+    _build_info_http(jenkins, {"lastBuild": {"number": 4}})
+    result = _invoke("--no-colour", "--no-update-check", "build", "blame", "deploy")
+    assert result.exit_code == 0
+    assert "Not a single change aboard build #4" in result.stderr
+
+
+def test_build_blame_missing_build(jenkins):
+    _build_info_http(jenkins, {"lastFailedBuild": None})
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "blame",
+        "deploy",
+        "lastFailedBuild",
+    )
+    assert result.exit_code == 0
+    assert "could find no build 'lastFailedBuild'" in result.stderr
+
+
+def test_build_blame_json_exposes_semantic_records(jenkins):
+    _build_info_http(jenkins, {"lastBuild": _BLAME_PIPELINE_BUILD})
+    result = _invoke(
+        "--no-update-check", "--format", "json", "build", "blame", "deploy"
+    )
+    assert result.exit_code == 0
+    data = _json.loads(result.stdout)
+    assert data[0]["commit"] == "deadbeefcafe1234"  # full id in structured output
+    assert data[0]["author"] == "Bertie Wooster"
+    assert data[0]["email"] == "bertie@drones.example"
+    assert data[0]["message"] == "fix the boiler"
 
 
 def test_builds_list_param_filter(jenkins):
@@ -1974,26 +2168,110 @@ def test_test_report_duration_formatted(monkeypatch):
     assert "0.123s" in result.stdout
 
 
-# ── removed flat-command spellings ───────────────────────────────────────────
+# ── deprecated aliases ────────────────────────────────────────────────────────
+
+_NOTICE = "has moved to"
 
 
-def test_old_flat_spellings_are_gone():
-    for old in ("jobs", "builds", "params", "rebuild", "log", "cancel", "nodes"):
-        result = _invoke("--no-colour", "--no-update-check", old)
-        assert result.exit_code == 2, old
-        assert "No such command" in result.stderr, old
+def test_alias_jobs_works_and_warns(jenkins):
+    _jobs_http(jenkins, [{"name": "deploy-prod", "color": "blue"}])
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "deploy-prod" in result.stdout
+    assert _NOTICE in result.stderr
+    assert "🎩" in result.stderr
+    assert _NOTICE not in result.stdout
 
 
-def test_legacy_build_verb_no_longer_triggers(monkeypatch):
-    called = {"n": 0}
-    monkeypatch.setattr(
-        jenkins_mod.JenkinsClient,
-        "build",
-        lambda self, job, params=None: called.__setitem__("n", 1),
+def test_alias_params_works_and_warns(jenkins):
+    _job_detail_http(jenkins, {"property": []})
+    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves job params JOB'" in result.stderr
+
+
+def test_alias_builds_group_works_and_warns(jenkins):
+    _builds_list_http(jenkins, [{"number": 3, "result": "SUCCESS", "building": False}])
+    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
+    assert result.exit_code == 0
+    assert "#3" in result.stdout
+    assert "'jeeves build list JOB'" in result.stderr
+
+
+def test_alias_rebuild_works_and_warns(jenkins):
+    _rebuild_http(jenkins, {"actions": []})
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves build rebuild JOB'" in result.stderr
+
+
+def test_alias_log_keeps_old_option_signature(jenkins):
+    jenkins.get(url("job/deploy/7/consoleText"), text="the log")
+    result = _invoke(
+        "--no-colour", "--no-update-check", "log", "deploy", "--build", "7"
     )
-    result = _invoke("--no-colour", "--no-update-check", "build", "my-pipeline")
-    assert result.exit_code == 2
-    assert called["n"] == 0
+    assert result.exit_code == 0
+    assert "the log" in result.stdout
+    assert "'jeeves build log JOB [BUILD]'" in result.stderr
+
+
+def test_alias_cancel_keeps_old_option_signature(jenkins):
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(url("job/deploy/5/stop"), status_code=200)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "cancel", "deploy", "--build", "5"
+    )
+    assert result.exit_code == 0
+    assert _last_post(jenkins).url.lower().endswith("/5/stop")
+    assert "'jeeves build cancel JOB BUILD'" in result.stderr
+
+
+def test_alias_nodes_works_and_warns(jenkins):
+    _nodes_http(jenkins, [{"displayName": "agent-1", "offline": False}])
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "agent-1" in result.stdout
+    assert "'jeeves node list'" in result.stderr
+
+
+def test_legacy_build_verb_falls_back_to_trigger(jenkins):
+    _trigger_http(jenkins)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "my-pipeline",
+        "--param",
+        "ENV=prod",
+    )
+    assert result.exit_code == 0
+    assert "dispatch" in result.stdout
+    post = _last_post(jenkins)
+    assert post.url.lower().endswith("/buildwithparameters")
+    assert parse_qs(post.text) == {"ENV": ["prod"]}
+    assert "'jeeves job trigger JOB'" in result.stderr
+
+
+def test_legacy_build_verb_nested_job_path(jenkins):
+    _trigger_http(jenkins, job_path="job/folder/job/nested-job")
+    result = _invoke("--no-colour", "--no-update-check", "build", "folder/nested-job")
+    assert result.exit_code == 0
+    assert "/job/folder/job/nested-job/build" in _last_post(jenkins).url
+    assert _NOTICE in result.stderr
+
+
+def test_build_subcommand_takes_priority_over_fallback(jenkins):
+    _builds_list_http(jenkins, [])
+    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
+
+
+def test_new_spellings_emit_no_notice(jenkins):
+    _jobs_http(jenkins, [{"name": "deploy", "color": "blue"}])
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
 
 
 # ── connection profiles ───────────────────────────────────────────────────────
