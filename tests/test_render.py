@@ -9,6 +9,7 @@ from jeeves.render import (
     render_json,
     render_markdown,
     render_ndjson,
+    render_plain_table,
     render_table,
     render_template,
     strip_ansi,
@@ -101,3 +102,50 @@ def test_render_dispatch_tree_uses_callable():
 
 def test_render_empty_json_is_array():
     assert render("json", [], COLUMNS) == "[]"
+
+
+# ── plain format ─────────────────────────────────────────────────────────────
+
+_DECORATED_COLUMNS = [
+    Column(
+        "name",
+        "Job",
+        table=lambda r, i: f"\x1b[32m✅ {r['name']}\x1b[0m",
+        plain=lambda r: r["name"],
+    ),
+    Column(
+        "status",
+        "Status",
+        table=lambda r, i: (
+            "\x1b[31m❌ failed\x1b[0m" if r["status"] == "failed" else "✅ passed"
+        ),
+        plain=lambda r: r["status"],
+    ),
+]
+
+
+def test_render_plain_table_no_ansi():
+    out = render_plain_table(RECORDS, _DECORATED_COLUMNS)
+    assert "\x1b" not in out
+
+
+def test_render_plain_table_no_emoji():
+    out = render_plain_table(RECORDS, _DECORATED_COLUMNS)
+    assert "✅" not in out
+    assert "❌" not in out
+    assert "passed" in out
+    assert "failed" in out
+
+
+def test_render_plain_table_via_dispatch():
+    out = render("plain", RECORDS, _DECORATED_COLUMNS)
+    assert "\x1b" not in out
+    assert "deploy" in out
+    assert "build" in out
+
+
+def test_render_plain_table_headers():
+    out = render_plain_table(RECORDS, COLUMNS)
+    lines = out.splitlines()
+    assert "Job" in lines[0]
+    assert "Status" in lines[0]

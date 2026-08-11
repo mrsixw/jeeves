@@ -7,7 +7,9 @@ from click.testing import CliRunner
 from conftest import JENKINS_URL, api, url
 
 from jeeves import cli as cli_mod
+from jeeves import jenkins as jenkins_mod
 from jeeves.cli import _hyperlink, main
+from jeeves.jenkins import JenkinsError
 from jeeves.updater import UpdateStatus
 
 
@@ -1909,6 +1911,369 @@ def test_whoami_error_shows_butler_message(jenkins):
     assert "unreachable" in result.output
 
 
+# ── test-report ───────────────────────────────────────────────────────────────
+
+_REPORT_DATA = {
+    "passCount": 5,
+    "failCount": 2,
+    "skipCount": 1,
+    "duration": 3.14,
+    "suites": [
+        {
+            "cases": [
+                {
+                    "status": "FAILED",
+                    "className": "com.example.FooTest",
+                    "name": "testFoo",
+                    "errorDetails": "AssertionError: expected true",
+                    "duration": 0.1,
+                },
+                {
+                    "status": "PASSED",
+                    "className": "com.example.BarTest",
+                    "name": "testBar",
+                    "errorDetails": None,
+                    "duration": 0.05,
+                },
+                {
+                    "status": "SKIPPED",
+                    "className": "com.example.BazTest",
+                    "name": "testBaz",
+                    "errorDetails": None,
+                    "duration": 0.0,
+                },
+            ]
+        }
+    ],
+}
+
+
+def _test_report_mock(monkeypatch, return_value):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": return_value,
+    )
+
+
+def test_test_report_summary_on_stderr(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "Tests:" in result.stderr
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_cases_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" in result.stdout
+
+
+def test_test_report_no_report_shows_butler_message(monkeypatch):
+    _test_report_mock(monkeypatch, None)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "No test report was filed" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_failed_only_filters_cases(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "testFoo" in result.stdout
+    assert "testBar" not in result.stdout
+    assert "testBaz" not in result.stdout
+
+
+def test_test_report_failed_only_no_failures_empty(monkeypatch):
+    all_passed = {
+        "passCount": 3,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, all_passed)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "--failed-only",
+    )
+    assert result.exit_code == 0
+    assert "No failed tests" in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_test_report_json_format(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    records = _json.loads(result.stdout)
+    assert isinstance(records, list)
+    assert len(records) == 3
+    keys = set(records[0].keys())
+    assert {"class_name", "name", "status", "duration", "error"}.issubset(keys)
+
+
+def test_test_report_jenkins_error_exits_1(monkeypatch):
+    def _raise(self, job, build="lastBuild"):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _raise)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 1
+    assert "unreachable" in result.output
+
+
+def test_test_report_default_build_passes_lastBuild(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == "lastBuild"
+
+
+def test_test_report_specific_build_number(monkeypatch):
+    captured = {}
+
+    def _capture(self, job, build="lastBuild"):
+        captured["build"] = build
+        return _REPORT_DATA
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "test_report", _capture)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "test-report",
+        "my-pipeline",
+        "42",
+    )
+    assert result.exit_code == 0
+    assert captured["build"] == "42"
+
+
+def test_test_report_summary_not_on_stdout(monkeypatch):
+    _test_report_mock(monkeypatch, _REPORT_DATA)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "Tests:" not in result.stdout
+
+
+def test_test_report_snippet_truncated(monkeypatch):
+    long_error = "x" * 100
+    data = {
+        "passCount": 0,
+        "failCount": 1,
+        "skipCount": 0,
+        "duration": 0.1,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "FAILED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": long_error,
+                        "duration": 0.1,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "..." in result.stdout
+
+
+def test_test_report_duration_formatted(monkeypatch):
+    data = {
+        "passCount": 1,
+        "failCount": 0,
+        "skipCount": 0,
+        "duration": 1.0,
+        "suites": [
+            {
+                "cases": [
+                    {
+                        "status": "PASSED",
+                        "className": "com.example.FooTest",
+                        "name": "testFoo",
+                        "errorDetails": None,
+                        "duration": 0.123,
+                    }
+                ]
+            }
+        ],
+    }
+    _test_report_mock(monkeypatch, data)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "build", "test-report", "my-pipeline"
+    )
+    assert result.exit_code == 0
+    assert "0.123s" in result.stdout
+
+
+# ── deprecated aliases ────────────────────────────────────────────────────────
+
+_NOTICE = "has moved to"
+
+
+def test_alias_jobs_works_and_warns(jenkins):
+    _jobs_http(jenkins, [{"name": "deploy-prod", "color": "blue"}])
+    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
+    assert result.exit_code == 0
+    assert "deploy-prod" in result.stdout
+    assert _NOTICE in result.stderr
+    assert "🎩" in result.stderr
+    assert _NOTICE not in result.stdout
+
+
+def test_alias_params_works_and_warns(jenkins):
+    _job_detail_http(jenkins, {"property": []})
+    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves job params JOB'" in result.stderr
+
+
+def test_alias_builds_group_works_and_warns(jenkins):
+    _builds_list_http(jenkins, [{"number": 3, "result": "SUCCESS", "building": False}])
+    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
+    assert result.exit_code == 0
+    assert "#3" in result.stdout
+    assert "'jeeves build list JOB'" in result.stderr
+
+
+def test_alias_rebuild_works_and_warns(jenkins):
+    _rebuild_http(jenkins, {"actions": []})
+    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
+    assert result.exit_code == 0
+    assert "'jeeves build rebuild JOB'" in result.stderr
+
+
+def test_alias_log_keeps_old_option_signature(jenkins):
+    jenkins.get(url("job/deploy/7/consoleText"), text="the log")
+    result = _invoke(
+        "--no-colour", "--no-update-check", "log", "deploy", "--build", "7"
+    )
+    assert result.exit_code == 0
+    assert "the log" in result.stdout
+    assert "'jeeves build log JOB [BUILD]'" in result.stderr
+
+
+def test_alias_cancel_keeps_old_option_signature(jenkins):
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(url("job/deploy/5/stop"), status_code=200)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "cancel", "deploy", "--build", "5"
+    )
+    assert result.exit_code == 0
+    assert _last_post(jenkins).url.lower().endswith("/5/stop")
+    assert "'jeeves build cancel JOB BUILD'" in result.stderr
+
+
+def test_alias_nodes_works_and_warns(jenkins):
+    _nodes_http(jenkins, [{"displayName": "agent-1", "offline": False}])
+    result = _invoke("--no-colour", "--no-update-check", "nodes")
+    assert result.exit_code == 0
+    assert "agent-1" in result.stdout
+    assert "'jeeves node list'" in result.stderr
+
+
+def test_legacy_build_verb_falls_back_to_trigger(jenkins):
+    _trigger_http(jenkins)
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "build",
+        "my-pipeline",
+        "--param",
+        "ENV=prod",
+    )
+    assert result.exit_code == 0
+    assert "dispatch" in result.stdout
+    post = _last_post(jenkins)
+    assert post.url.lower().endswith("/buildwithparameters")
+    assert parse_qs(post.text) == {"ENV": ["prod"]}
+    assert "'jeeves job trigger JOB'" in result.stderr
+
+
+def test_legacy_build_verb_nested_job_path(jenkins):
+    _trigger_http(jenkins, job_path="job/folder/job/nested-job")
+    result = _invoke("--no-colour", "--no-update-check", "build", "folder/nested-job")
+    assert result.exit_code == 0
+    assert "/job/folder/job/nested-job/build" in _last_post(jenkins).url
+    assert _NOTICE in result.stderr
+
+
+def test_build_subcommand_takes_priority_over_fallback(jenkins):
+    _builds_list_http(jenkins, [])
+    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
+
+
+def test_new_spellings_emit_no_notice(jenkins):
+    _jobs_http(jenkins, [{"name": "deploy", "color": "blue"}])
+    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
+    assert result.exit_code == 0
+    assert _NOTICE not in result.stderr
+
+
 # ── connection profiles ───────────────────────────────────────────────────────
 
 
@@ -2303,112 +2668,6 @@ def test_profile_commands_survive_broken_default_profile(tmp_path):
     assert "gone" in result.stderr
 
 
-# ── deprecated aliases ────────────────────────────────────────────────────────
-
-_NOTICE = "has moved to"
-
-
-def test_alias_jobs_works_and_warns(jenkins):
-    _jobs_http(jenkins, [{"name": "deploy-prod", "color": "blue"}])
-    result = _invoke("--no-colour", "--no-update-check", "jobs", "--no-weather")
-    assert result.exit_code == 0
-    assert "deploy-prod" in result.stdout
-    assert _NOTICE in result.stderr
-    assert "🎩" in result.stderr
-    assert _NOTICE not in result.stdout
-
-
-def test_alias_params_works_and_warns(jenkins):
-    _job_detail_http(jenkins, {"property": []})
-    result = _invoke("--no-colour", "--no-update-check", "params", "deploy")
-    assert result.exit_code == 0
-    assert "'jeeves job params JOB'" in result.stderr
-
-
-def test_alias_builds_group_works_and_warns(jenkins):
-    _builds_list_http(jenkins, [{"number": 3, "result": "SUCCESS", "building": False}])
-    result = _invoke("--no-colour", "--no-update-check", "builds", "list", "deploy")
-    assert result.exit_code == 0
-    assert "#3" in result.stdout
-    assert "'jeeves build list JOB'" in result.stderr
-
-
-def test_alias_rebuild_works_and_warns(jenkins):
-    _rebuild_http(jenkins, {"actions": []})
-    result = _invoke("--no-colour", "--no-update-check", "rebuild", "deploy")
-    assert result.exit_code == 0
-    assert "'jeeves build rebuild JOB'" in result.stderr
-
-
-def test_alias_log_keeps_old_option_signature(jenkins):
-    jenkins.get(url("job/deploy/7/consoleText"), text="the log")
-    result = _invoke(
-        "--no-colour", "--no-update-check", "log", "deploy", "--build", "7"
-    )
-    assert result.exit_code == 0
-    assert "the log" in result.stdout
-    assert "'jeeves build log JOB [BUILD]'" in result.stderr
-
-
-def test_alias_cancel_keeps_old_option_signature(jenkins):
-    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
-    jenkins.post(url("job/deploy/5/stop"), status_code=200)
-    result = _invoke(
-        "--no-colour", "--no-update-check", "cancel", "deploy", "--build", "5"
-    )
-    assert result.exit_code == 0
-    assert _last_post(jenkins).url.lower().endswith("/5/stop")
-    assert "'jeeves build cancel JOB BUILD'" in result.stderr
-
-
-def test_alias_nodes_works_and_warns(jenkins):
-    _nodes_http(jenkins, [{"displayName": "agent-1", "offline": False}])
-    result = _invoke("--no-colour", "--no-update-check", "nodes")
-    assert result.exit_code == 0
-    assert "agent-1" in result.stdout
-    assert "'jeeves node list'" in result.stderr
-
-
-def test_legacy_build_verb_falls_back_to_trigger(jenkins):
-    _trigger_http(jenkins)
-    result = _invoke(
-        "--no-colour",
-        "--no-update-check",
-        "build",
-        "my-pipeline",
-        "--param",
-        "ENV=prod",
-    )
-    assert result.exit_code == 0
-    assert "dispatch" in result.stdout
-    post = _last_post(jenkins)
-    assert post.url.lower().endswith("/buildwithparameters")
-    assert parse_qs(post.text) == {"ENV": ["prod"]}
-    assert "'jeeves job trigger JOB'" in result.stderr
-
-
-def test_legacy_build_verb_nested_job_path(jenkins):
-    _trigger_http(jenkins, job_path="job/folder/job/nested-job")
-    result = _invoke("--no-colour", "--no-update-check", "build", "folder/nested-job")
-    assert result.exit_code == 0
-    assert "/job/folder/job/nested-job/build" in _last_post(jenkins).url
-    assert _NOTICE in result.stderr
-
-
-def test_build_subcommand_takes_priority_over_fallback(jenkins):
-    _builds_list_http(jenkins, [])
-    result = _invoke("--no-colour", "--no-update-check", "build", "list", "deploy")
-    assert result.exit_code == 0
-    assert _NOTICE not in result.stderr
-
-
-def test_new_spellings_emit_no_notice(jenkins):
-    _jobs_http(jenkins, [{"name": "deploy", "color": "blue"}])
-    result = _invoke("--no-colour", "--no-update-check", "job", "list", "--no-weather")
-    assert result.exit_code == 0
-    assert _NOTICE not in result.stderr
-
-
 def test_bare_build_shows_group_usage():
     result = _invoke("--no-colour", "--no-update-check", "build")
     assert result.exit_code == 2
@@ -2441,6 +2700,135 @@ def test_build_log_defaults_to_last_build(jenkins):
     jenkins.get(url("job/deploy/lastBuild/consoleText"), text="")
     result = _invoke("--no-colour", "--no-update-check", "build", "log", "deploy")
     assert result.exit_code == 0
+
+
+# ── --quiet ───────────────────────────────────────────────────────────────────
+
+
+def test_quiet_suppresses_greeting():
+    result = _invoke("--no-colour", "--no-update-check", "--quiet")
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_quiet_suppresses_jobs_header(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [{"name": "deploy-prod", "color": "blue"}],
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "roster" not in result.stderr
+    assert "deploy-prod" in result.stdout
+
+
+def test_quiet_empty_state_suppressed(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "jobs", lambda self, folder=None, depth=0: []
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert result.stderr.strip() == ""
+    assert result.stdout.strip() == ""
+
+
+def test_quiet_butler_error_is_plain(monkeypatch):
+    def _raise(self, folder=None, depth=0):
+        raise JenkinsError("Cannot reach Jenkins at http://jenkins.example.com")
+
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "jobs", _raise)
+    result = _invoke("--no-colour", "--no-update-check", "--quiet", "job", "list")
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "unreachable" not in result.output
+    assert "sir" not in result.output
+
+
+def test_quiet_trigger_success_silent(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient, "build", lambda self, job, params=None: None
+    )
+    monkeypatch.setattr(jenkins_mod.JenkinsClient, "_fetch_crumb", lambda self: None)
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "job", "trigger", "my-job"
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_quiet_envvar_suppresses_greeting(monkeypatch):
+    monkeypatch.setenv("JEEVES_QUIET", "1")
+    result = _invoke("--no-colour", "--no-update-check")
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_quiet_does_not_suppress_data(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "jobs",
+        lambda self, folder=None, depth=0: [
+            {"name": "deploy-prod", "color": "blue"},
+            {"name": "test-suite", "color": "red"},
+        ],
+    )
+    result = _invoke(
+        "--no-colour", "--no-update-check", "--quiet", "job", "list", "--no-weather"
+    )
+    assert result.exit_code == 0
+    assert "deploy-prod" in result.stdout
+    assert "test-suite" in result.stdout
+
+
+def test_quiet_config_key_suppresses_greeting(tmp_path):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("quiet = true\n", encoding="utf-8")
+    result = _invoke("--no-colour", "--no-update-check", "--config", str(cfg_file))
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_quiet_test_report_summary_suppressed(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": _REPORT_DATA,
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--quiet",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    assert "Tests:" not in result.stderr
+    assert "testFoo" in result.stdout
+
+
+def test_quiet_test_report_no_report_silent(monkeypatch):
+    monkeypatch.setattr(
+        jenkins_mod.JenkinsClient,
+        "test_report",
+        lambda self, job, build="lastBuild": None,
+    )
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--quiet",
+        "build",
+        "test-report",
+        "my-pipeline",
+    )
+    assert result.exit_code == 0
+    assert result.stderr.strip() == ""
+    assert result.stdout.strip() == ""
 
 
 # ── build log --follow ────────────────────────────────────────────────────────

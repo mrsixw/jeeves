@@ -144,6 +144,20 @@ class JenkinsClient:
                 return None
             raise
 
+    def test_report(self, job: str, build: int | str = "lastBuild") -> dict | None:
+        """Fetch the JUnit test report for a build.
+
+        Returns ``None`` when Jenkins has no test report (404), e.g. the test
+        stage was skipped or the job never published results.
+        """
+        path = f"{_normalize_jenkins_path(job)}/{build}/testReport"
+        try:
+            return self._get(path)
+        except JenkinsError as exc:
+            if "Jenkins returned 404" in str(exc):
+                return None
+            raise
+
     def changes(self, job: str, build: int | str = "lastBuild") -> dict | None:
         """Fetch a build's culprits and SCM changes by number or permalink.
 

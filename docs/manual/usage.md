@@ -54,6 +54,8 @@ jeeves build list my-pipeline --limit 50 --result FAILURE
 jeeves build show my-pipeline 142            # a specific build
 jeeves build log my-pipeline 142             # console output (default: lastBuild)
 jeeves build log my-pipeline --follow        # stream a running build live (tail -f)
+jeeves build test-report my-pipeline 142     # JUnit test report
+jeeves build test-report my-pipeline --failed-only   # only FAILED/REGRESSION cases
 jeeves build cancel my-pipeline 142          # cancel a running build
 jeeves --format json build list my-pipeline  # structured output for scripting
 jeeves build rebuild my-pipeline             # re-run lastBuild with its parameters

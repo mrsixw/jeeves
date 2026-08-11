@@ -607,3 +607,87 @@ def test_whoami_connection_error_raises(client: JenkinsClient) -> None:
         m.get(f"{BASE}/me/api/json", exc=requests.ConnectionError("refused"))
         with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
             client.whoami()
+
+
+# ── test_report ──────────────────────────────────────────────────────────────
+
+_REPORT_PAYLOAD = {
+    "passCount": 10,
+    "failCount": 2,
+    "skipCount": 1,
+    "duration": 5.5,
+    "suites": [
+        {
+            "cases": [
+                {
+                    "status": "FAILED",
+                    "className": "com.FooTest",
+                    "name": "testA",
+                    "errorDetails": "boom",
+                    "duration": 0.1,
+                }
+            ]
+        }
+    ],
+}
+
+
+def test_test_report_returns_data(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/testReport/api/json",
+            json=_REPORT_PAYLOAD,
+        )
+        data = client.test_report("my-pipeline")
+    assert data["passCount"] == 10
+    assert data["failCount"] == 2
+
+
+def test_test_report_404_returns_none(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/testReport/api/json",
+            status_code=404,
+        )
+        result = client.test_report("my-pipeline")
+    assert result is None
+
+
+def test_test_report_other_error_raises(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/testReport/api/json",
+            status_code=500,
+        )
+        with pytest.raises(JenkinsError, match="500"):
+            client.test_report("my-pipeline")
+
+
+def test_test_report_default_build_is_lastBuild(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/lastBuild/testReport/api/json",
+            json=_REPORT_PAYLOAD,
+        )
+        client.test_report("my-pipeline")
+    assert "lastBuild" in m.last_request.url
+
+
+def test_test_report_specific_build_number(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/my-pipeline/42/testReport/api/json",
+            json=_REPORT_PAYLOAD,
+        )
+        client.test_report("my-pipeline", build=42)
+    assert "/42/" in m.last_request.url
+
+
+def test_test_report_nested_job_path_encoded(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/job/folder/job/child/lastBuild/testReport/api/json",
+            json=_REPORT_PAYLOAD,
+        )
+        data = client.test_report("folder/child")
+    assert data is not None
