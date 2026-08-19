@@ -4,7 +4,8 @@
 
 If you see no colours, check:
 
-- Are you using `--no-colour` or `JEEVES_NO_COLOUR=1`?
+- Are you using `--no-colour`, or is `JEEVES_NO_COLOUR` set to anything at
+  all? Any non-empty value disables colour, including `0` and `false`.
 - Does your terminal support ANSI colours?
 - Try `--theme default` explicitly.
 

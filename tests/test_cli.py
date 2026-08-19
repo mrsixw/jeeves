@@ -2,6 +2,7 @@ import json as _json
 import re
 from urllib.parse import parse_qs
 
+import pytest
 import requests
 from click.testing import CliRunner
 from conftest import JENKINS_URL, api, url
@@ -2527,3 +2528,75 @@ def test_build_log_follow_ctrl_c_exits_cleanly(jenkins, monkeypatch):
     assert result.exit_code == 130
     assert "still running" in result.stdout
     assert "cease following" in result.stderr
+
+
+# ── Environment-variable presence semantics (issue #115) ───────────────────
+
+
+def _update_check_calls(monkeypatch, jenkins, env=None):
+    """Run `jeeves status` and return how many times the update check fired."""
+    called = {"n": 0}
+
+    def counting_check(**kw):
+        called["n"] += 1
+        return None
+
+    monkeypatch.setattr(cli_mod, "check_for_update", counting_check)
+    for name, value in (env or {}).items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    jenkins.get(api(), json=_STATUS_JSON)
+    _invoke("--no-colour", "status")
+    return called["n"]
+
+
+@pytest.mark.parametrize("value", ["1", "0", "false", "off", "banana"])
+def test_no_update_check_env_any_non_empty_value_suppresses(
+    monkeypatch, jenkins, value
+):
+    # Presence is the signal, per no-color.org: the value is never parsed.
+    env = {"JEEVES_NO_UPDATE_CHECK": value}
+    assert _update_check_calls(monkeypatch, jenkins, env) == 0
+
+
+def test_no_update_check_env_empty_leaves_check_enabled(monkeypatch, jenkins):
+    env = {"JEEVES_NO_UPDATE_CHECK": ""}
+    assert _update_check_calls(monkeypatch, jenkins, env) == 1
+
+
+def test_no_update_check_env_unset_leaves_check_enabled(monkeypatch, jenkins):
+    env = {"JEEVES_NO_UPDATE_CHECK": None}
+    assert _update_check_calls(monkeypatch, jenkins, env) == 1
+
+
+@pytest.mark.parametrize("value", ["1", "0", "false", "banana"])
+def test_no_colour_env_any_non_empty_value_disables_colour(monkeypatch, jenkins, value):
+    monkeypatch.setattr(cli_mod, "check_for_update", lambda **kw: None)
+    monkeypatch.setenv("JEEVES_NO_COLOUR", value)
+    jenkins.get(api(), json=_STATUS_JSON)
+    result = CliRunner().invoke(main, ["status"], color=True)
+    assert result.exit_code == 0, result.output
+    assert "\033[" not in result.output, f"{value!r} should disable colour"
+
+
+def test_no_colour_env_empty_leaves_colour_enabled(monkeypatch, jenkins):
+    monkeypatch.setattr(cli_mod, "check_for_update", lambda **kw: None)
+    monkeypatch.setenv("JEEVES_NO_COLOUR", "")
+    jenkins.get(api(), json=_STATUS_JSON)
+    result = CliRunner().invoke(main, ["status"], color=True)
+    assert result.exit_code == 0
+    assert "\033[" in result.output
+
+
+@pytest.mark.parametrize("var", ["JEEVES_NO_UPDATE_CHECK", "JEEVES_NO_COLOUR"])
+def test_unparsable_env_value_never_aborts_the_run(monkeypatch, jenkins, var):
+    # The regression: Click's envvar= on a flag rejected unrecognised values,
+    # so a typo in a shell profile broke every invocation.
+    monkeypatch.setattr(cli_mod, "check_for_update", lambda **kw: None)
+    monkeypatch.setenv(var, "banana")
+    jenkins.get(api(), json=_STATUS_JSON)
+    result = _invoke("status")
+    assert result.exit_code == 0, result.output
+    assert "not a valid boolean" not in result.output
