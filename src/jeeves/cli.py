@@ -352,6 +352,12 @@ def main(
         click.echo(click.style(str(exc), fg="red"), err=True, color=colour)
         sys.exit(1)
 
+    # Re-composed as soon as cfg exists, and before the profile errors below,
+    # so everything downstream honours the config key. The load failure above
+    # is the one message it cannot reach — there is no cfg to read yet.
+    no_colour = no_colour or cfg.get("no-colour", False)
+    colour = not no_colour
+
     if do_init_config:
         path = write_default_config()
         click.echo(f"Very good. Default config written to: {path}")
