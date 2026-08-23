@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from tabulate import tabulate
 
 __all__ = [
-    "FORMATS",
     "Column",
+    "FORMATS",
     "render",
     "render_delimited",
     "render_json",
