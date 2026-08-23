@@ -20,6 +20,19 @@ from dataclasses import dataclass
 
 from tabulate import tabulate
 
+__all__ = [
+    "FORMATS",
+    "Column",
+    "render",
+    "render_delimited",
+    "render_json",
+    "render_markdown",
+    "render_ndjson",
+    "render_table",
+    "render_template",
+    "strip_ansi",
+]
+
 # Format names accepted by --format. ``tree`` is only meaningful for commands
 # that supply a tree renderer (e.g. the hierarchical jobs roster).
 FORMATS = ["table", "tree", "json", "ndjson", "markdown", "csv", "tsv", "template"]

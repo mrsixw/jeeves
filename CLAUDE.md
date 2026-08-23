@@ -8,7 +8,7 @@
 ## Project Structure
 - `src/jeeves/` — package source code
   - `cli.py` — Click group entrypoint with `status`, `queue`, `whoami`, `swatch` commands and `job`, `build`, `node` noun groups mirroring the Jenkins hierarchy (hidden deprecated aliases keep the old flat commands working for one release)
-  - `jenkins.py` — Jenkins HTTP API client (`JenkinsClient`, `JenkinsError`, `_normalize_jenkins_path`)
+  - `jenkins.py` — Jenkins HTTP API client (`JenkinsClient`, `JenkinsError`, `normalize_jenkins_path`)
   - `ui.py` — Terminal themes, seasonal colour system (SEASONAL_PALETTES, PRIDE_RAINBOW, HOLI_RAINBOW, THEMES registry)
   - `config.py` — TOML configuration loader; `get_jenkins_config()` extracts Jenkins connection settings
   - `cache.py` — Generic TTL disk cache
@@ -34,7 +34,7 @@
 - `GET /computer/api/json` — nodes/agents (computer[])
 - `GET /me/api/json` — currently authenticated user (id, fullName)
 - `GET /crumbIssuer/api/json` — CSRF crumb; fetch before first POST, silently skip if unavailable
-- Nested jobs: encode `folder/job` as `job/folder/job/job` in URL paths (use `_normalize_jenkins_path`)
+- Nested jobs: encode `folder/job` as `job/folder/job/job` in URL paths (use `normalize_jenkins_path`)
 
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
@@ -56,7 +56,7 @@ This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, 
 - Empty queue: `"😴 The queue stands quite empty. Jenkins is evidently at leisure — a rare and precious state of affairs."`
 - No nodes: `"🚪 The household staff appears to have entirely absented themselves. One trusts they haven't all handed in their notice."`
 
-**Errors** — route through `_butler_error(msg, colour)`, prefixed with `🎩`, sent to stderr. Errors retain "sir" for the apologetic butler tone:
+**Errors** — route through `butler_error(msg, colour)`, prefixed with `🎩`, sent to stderr. Errors retain "sir" for the apologetic butler tone:
 - Connection failure: `"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, sir. The line seems entirely dead."`
 - 403 Forbidden: `"Jenkins has turned us away at the door, sir. A 403 — most irregular. One suspects our credentials may not be in order."`
 - 404 Not Found: `"I searched the premises most thoroughly, sir, but the requested resource could not be found. A 404. It has vanished like Bertie's good intentions."`
@@ -84,6 +84,13 @@ This repository provides standardized automated workflows for managing issues. A
 - `make lint` — check linting and formatting
 - `make format` — auto-fix lint and formatting
 - `make build` — build a shiv executable
+
+## Module API contract
+- A leading `_` means "internal to this module". Anything a sibling module
+  imports must not have one, and must appear in that module's `__all__`.
+- Every module in `src/jeeves/` declares `__all__`. Add new public names to it.
+- `tests/test_public_api.py` enforces both. Tests may still reach into the
+  internals of the module they test — that boundary is not policed.
 
 ## Commit Messages
 - Use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `ci:`).
