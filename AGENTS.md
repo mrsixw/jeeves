@@ -53,8 +53,14 @@ This repository provides standardized automated workflows for managing issues. A
 - A leading `_` means "internal to this module". Anything a sibling module
   imports must not have one, and must appear in that module's `__all__`.
 - Every module in `src/jeeves/` declares `__all__`. Add new public names to it.
-- `tests/test_public_api.py` enforces both. Tests may still reach into the
-  internals of the module they test — that boundary is not policed.
+- Reach other modules through their public names only. If you need something a
+  module keeps private, widen that module's API deliberately — rename it and add
+  it to `__all__` — rather than reaching past the underscore. A private name you
+  had to import was never really private.
+- The same applies to third-party libraries: depend on their documented API, not
+  on internals that can change in a patch release.
+- `tests/test_public_api.py` enforces the first two. Tests may still reach into
+  the internals of the module they test — that boundary is not policed.
 
 ## Commit Messages
 - Use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `ci:`).
