@@ -121,7 +121,8 @@ Config key: `seasonal-calendar = "western"`
 
 ### `--no-colour`
 
-Disable all ANSI colour output. Also honoured via `JEEVES_NO_COLOUR=1`.
+Disable all ANSI colour output. Also honoured via the `JEEVES_NO_COLOUR`
+environment variable, set to any non-empty value.
 
 ## Output formats
 
@@ -211,7 +212,16 @@ Works with no config file or Jenkins connection set up.
 
 ### `--no-update-check`
 
-Disable the automatic update check. Also honoured via `JEEVES_NO_UPDATE_CHECK=1`.
+Disable the automatic update check. Also honoured via the
+`JEEVES_NO_UPDATE_CHECK` environment variable, set to any non-empty value.
+
+Both `JEEVES_NO_COLOUR` and `JEEVES_NO_UPDATE_CHECK` are resolved by
+**presence**, following the [no-color.org](https://no-color.org) convention:
+any non-empty value switches the behaviour off, and only unset or empty leaves
+it on. The value is never parsed, so `=0` and `=false` still disable — and a
+stray `JEEVES_NO_COLOUR=maybe` in a shell profile is harmless rather than
+fatal. `JEEVES_URL`, `JEEVES_USER`, `JEEVES_TOKEN` and `JEEVES_PROFILE` carry
+values and are read normally.
 
 Config key: `no-update-check = false`
 

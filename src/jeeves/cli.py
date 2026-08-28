@@ -7,6 +7,7 @@ utmost discretion and efficiency.
 from __future__ import annotations
 
 import functools
+import os
 import random
 import shutil
 import sys
@@ -59,6 +60,24 @@ class _Ctx:
 
 # Hands each subcommand the group's resolved _Ctx (see ctx.obj in main()).
 pass_ctx = click.make_pass_decorator(_Ctx)
+
+
+def _env_flag_is_set(name: str) -> bool:
+    """Report whether an environment variable is set to any non-empty value.
+
+    This is the no-color.org convention: presence is the signal and the value
+    is deliberately ignored, so ``JEEVES_NO_COLOUR=0`` disables colour just as
+    ``=1`` does.
+
+    Click's ``envvar=`` on a boolean flag cannot express this. It routes the
+    value through the BOOL converter, so ``=false`` reads as "leave it on" —
+    the opposite of the spec — and an unrecognised value aborts the run
+    outright. A typo in a shell profile should be ignored, not fatal.
+
+    Value-carrying options such as ``JEEVES_URL`` are unaffected; Click's
+    ``envvar=`` is the right tool for those.
+    """
+    return bool(os.environ.get(name))
 
 
 def _complete_profile(ctx, param, incomplete) -> list:
@@ -238,8 +257,14 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     "no_colour",
     is_flag=True,
     default=False,
-    envvar=f"{_ENVVAR_PREFIX}_NO_COLOUR",
-    help="Disable all ANSI colour output.",
+    # No envvar= here: Click would route JEEVES_NO_COLOUR through its BOOL
+    # converter, so unrecognised values abort the run. Resolved by presence in
+    # the callback instead — see _env_flag_is_set.
+    help=(
+        "Disable all ANSI colour output."
+        f" Also honoured via {_ENVVAR_PREFIX}_NO_COLOUR, set to any"
+        " non-empty value."
+    ),
 )
 @click.option(
     "--format",
@@ -272,8 +297,12 @@ def _make_client(ctx: _Ctx) -> JenkinsClient:
     "--no-update-check",
     is_flag=True,
     default=False,
-    envvar=f"{_ENVVAR_PREFIX}_NO_UPDATE_CHECK",
-    help="Disable the automatic update check.",
+    # No envvar= here — see the note on --no-colour.
+    help=(
+        "Disable the automatic update check."
+        f" Also honoured via {_ENVVAR_PREFIX}_NO_UPDATE_CHECK, set to any"
+        " non-empty value."
+    ),
 )
 @click.pass_context
 def main(
@@ -300,6 +329,14 @@ def main(
     Good morning. How may Jeeves be of assistance?
     """
     configure_logging()
+
+    # Resolved by presence, not parsed: see _env_flag_is_set. Must run before
+    # the first use of no_colour just below, and composes with the config
+    # fallback further down.
+    no_colour = no_colour or _env_flag_is_set(f"{_ENVVAR_PREFIX}_NO_COLOUR")
+    no_update_check = no_update_check or _env_flag_is_set(
+        f"{_ENVVAR_PREFIX}_NO_UPDATE_CHECK"
+    )
     colour = not no_colour
 
     # The completions subcommand must stay usable with no config/profile at
