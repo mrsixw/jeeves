@@ -5,6 +5,13 @@ import re
 import requests
 from requests.auth import HTTPBasicAuth
 
+__all__ = [
+    "JenkinsClient",
+    "JenkinsError",
+    "JenkinsLoginRequired",
+    "normalize_jenkins_path",
+]
+
 
 class JenkinsError(Exception):
     """Raised when a Jenkins API call fails."""
@@ -33,7 +40,7 @@ def _is_login_redirect(resp: requests.Response) -> bool:
     return any(_LOGIN_REDIRECT_MARKER in (c or "") for c in candidates)
 
 
-def _normalize_jenkins_path(path: str) -> str:
+def normalize_jenkins_path(path: str) -> str:
     """Normalize a slash-separated job/folder path to Jenkins URL format.
 
     Jenkins encodes nested paths with intermediate /job/ prefixes, e.g.
@@ -50,6 +57,16 @@ class JenkinsClient:
         if username and token:
             self._session.auth = HTTPBasicAuth(username, token)
         self._crumb_fetched = False
+
+    @property
+    def base_url(self) -> str:
+        """The Jenkins root URL, with any trailing slash removed.
+
+        Read-only deliberately: the session's auth and the CSRF crumb are both
+        bound to this host at construction, so repointing the base afterwards
+        would leave them aimed at a different Jenkins.
+        """
+        return self._base
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         try:
@@ -105,13 +122,13 @@ class JenkinsClient:
         return self._get("")
 
     def jobs(self, folder: str | None = None, depth: int = 0) -> list[dict]:
-        path = _normalize_jenkins_path(folder) if folder else ""
+        path = normalize_jenkins_path(folder) if folder else ""
         params = {"depth": depth} if depth else None
         return self._get(path, params=params).get("jobs", [])
 
     def job(self, job: str) -> dict:
         """Fetch a job's detail JSON (parameters, builds, properties)."""
-        return self._get(_normalize_jenkins_path(job))
+        return self._get(normalize_jenkins_path(job))
 
     def builds(self, job: str, limit: int = 20) -> list[dict]:
         """Fetch a job's recent builds (newest first), capped at ``limit``.
@@ -121,7 +138,7 @@ class JenkinsClient:
         build's parameters and causes so callers can inspect or filter on
         them without a second round-trip per build.
         """
-        path = _normalize_jenkins_path(job)
+        path = normalize_jenkins_path(job)
         tree = (
             "builds[number,result,timestamp,duration,url,building,"
             "actions[parameters[name,value],"
@@ -136,7 +153,7 @@ class JenkinsClient:
         Returns ``None`` when the build or permalink does not exist (404), e.g.
         a job that has never failed has no ``lastFailedBuild``.
         """
-        path = f"{_normalize_jenkins_path(job)}/{build}"
+        path = f"{normalize_jenkins_path(job)}/{build}"
         try:
             return self._get(path)
         except JenkinsError as exc:
@@ -153,7 +170,7 @@ class JenkinsClient:
         see whichever the job type provides. Returns ``None`` when the build
         or permalink does not exist (404).
         """
-        path = f"{_normalize_jenkins_path(job)}/{build}"
+        path = f"{normalize_jenkins_path(job)}/{build}"
         item_fields = (
             "items[commitId,msg,timestamp,authorEmail,author[fullName,absoluteUrl]]"
         )
@@ -176,7 +193,7 @@ class JenkinsClient:
         when the header is absent — callers that don't follow the build
         can simply ignore the return value.
         """
-        job_path = _normalize_jenkins_path(job)
+        job_path = normalize_jenkins_path(job)
         endpoint = f"{job_path}/buildWithParameters" if params else f"{job_path}/build"
         resp = self._post(endpoint, data=params)
         match = re.search(r"/queue/item/(\d+)", resp.headers.get("Location", ""))
@@ -191,7 +208,7 @@ class JenkinsClient:
         return self._get(f"queue/item/{item_id}")
 
     def log(self, job: str, build: int | str = "lastBuild") -> str:
-        job_path = _normalize_jenkins_path(job)
+        job_path = normalize_jenkins_path(job)
         url = f"{self._base}/{job_path}/{build}/consoleText"
         return self._request("GET", url, timeout=30).text
 
@@ -204,7 +221,7 @@ class JenkinsClient:
         while the build is still producing output, so callers can poll
         with ``start=next_start`` until it goes false.
         """
-        job_path = _normalize_jenkins_path(job)
+        job_path = normalize_jenkins_path(job)
         url = f"{self._base}/{job_path}/{build}/logText/progressiveText"
         resp = self._request("GET", url, params={"start": start}, timeout=30)
         next_start = int(resp.headers.get("X-Text-Size", start))
@@ -215,7 +232,7 @@ class JenkinsClient:
         return self._get("queue").get("items", [])
 
     def cancel(self, job: str, build: int) -> None:
-        job_path = _normalize_jenkins_path(job)
+        job_path = normalize_jenkins_path(job)
         self._post(f"{job_path}/{build}/stop")
 
     def nodes(self, depth: int = 0) -> list[dict]:

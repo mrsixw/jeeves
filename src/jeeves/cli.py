@@ -31,11 +31,16 @@ from .config import (
     show_config,
     write_default_config,
 )
-from .jenkins import JenkinsClient, JenkinsError, _normalize_jenkins_path
+from .jenkins import JenkinsClient, JenkinsError, normalize_jenkins_path
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import UpdateStatus, check_for_update, perform_update
+
+__all__ = [
+    "butler_error",
+    "main",
+]
 
 _ENVVAR_PREFIX = "JEEVES"
 _BUTLER_ITEMS = ["🎩", "🥂", "🤵", "📋", "🫗"]
@@ -111,7 +116,7 @@ def _butler_bother(exc: Exception, colour: bool) -> None:
     _butler_fail(f"I'm afraid there's been a spot of bother, sir: {exc}", colour)
 
 
-def _butler_error(msg: str, colour: bool) -> None:
+def butler_error(msg: str, colour: bool) -> None:
     if "requires browser login at" in msg:
         url = msg.split("requires browser login at ", 1)[-1].strip()
         text = (
@@ -490,7 +495,7 @@ def status(ctx: _Ctx) -> None:
     try:
         data = client.status()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     desc = data.get("nodeDescription", "Jenkins")
@@ -1032,7 +1037,7 @@ def _collect_job_records(
     for j in job_list:
         name = j.get("name", "?")
         full_path = f"{path_prefix}/{name}" if path_prefix else name
-        url = f"{base_url}/{_normalize_jenkins_path(full_path)}"
+        url = f"{base_url}/{normalize_jenkins_path(full_path)}"
 
         if _is_folder(j):
             records.append(
@@ -1196,7 +1201,7 @@ def _emit(
             compress_col=cc,
         )
     except ValueError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
     click.echo(out, color=ctx.colour)
 
@@ -1245,11 +1250,11 @@ def job_list(
     try:
         job_list = client.jobs(folder=folder, depth=depth)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     records = _collect_job_records(
-        client, job_list, no_weather, expand, folder or "", client._base
+        client, job_list, no_weather, expand, folder or "", client.base_url
     )
     columns = _job_columns(ctx, no_weather)
     root_label = f"jenkins/{folder}" if folder else "jenkins"
@@ -1325,7 +1330,7 @@ def _wait_for_build(
         try:
             item = client.queue_item(queue_id)
         except JenkinsError as exc:
-            _butler_error(str(exc), ctx.colour)
+            butler_error(str(exc), ctx.colour)
             sys.exit(1)
         if item.get("cancelled"):
             click.echo(
@@ -1359,7 +1364,7 @@ def _wait_for_build(
         try:
             info = client.build_info(job_name, number)
         except JenkinsError as exc:
-            _butler_error(str(exc), ctx.colour)
+            butler_error(str(exc), ctx.colour)
             sys.exit(1)
         result = (info or {}).get("result")
         if info is not None and not info.get("building") and result:
@@ -1444,7 +1449,7 @@ def job_trigger(
     try:
         queue_id = client.build(job_name, params=param_dict or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     click.echo(
@@ -1607,7 +1612,7 @@ def build_summary(
             for permalink, label in _BUILD_PERMALINKS
         ]
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     if all(r["number"] is None for r in records):
@@ -1664,7 +1669,7 @@ def build_list(
     try:
         raw = client.builds(job, limit=limit)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     records = [_raw_build_record(b) for b in raw]
@@ -1701,7 +1706,7 @@ def build_show(
     try:
         info = client.build_info(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     records = [_raw_build_record(info)] if info is not None else []
@@ -1792,7 +1797,7 @@ def build_blame(ctx: _Ctx, job: str, build_id: str) -> None:
     try:
         info = client.changes(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     if info is None:
@@ -1859,7 +1864,7 @@ def job_params(
     try:
         job_json = client.job(job)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     records = _param_records(job_json)
@@ -1937,7 +1942,7 @@ def build_rebuild(
     try:
         info = client.build_info(job, build_id)
         if info is None:
-            _butler_error(
+            butler_error(
                 f"There is no build on record to repeat for '{job}'.",
                 ctx.colour,
             )
@@ -1945,7 +1950,7 @@ def build_rebuild(
         merged = {**_params_from_build(info), **override_dict}
         client.build(job, params=merged or None)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     message = f"🔁 Once more, with feeling — re-running '{job}'."
@@ -1963,7 +1968,7 @@ def _log_impl(ctx: _Ctx, job: str, build_id: str) -> None:
     try:
         text = client.log(job, build=build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     click.echo(text, nl=False)
@@ -1982,7 +1987,7 @@ def _follow_impl(ctx: _Ctx, job: str, build_id: str) -> None:
                     job, build=build_id, start=start
                 )
             except JenkinsError as exc:
-                _butler_error(str(exc), ctx.colour)
+                butler_error(str(exc), ctx.colour)
                 sys.exit(1)
             if text:
                 click.echo(text, nl=False)
@@ -2035,14 +2040,14 @@ def queue(ctx: _Ctx) -> None:
     try:
         items = client.queue()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     records = []
     for item in items:
         task_name = item.get("task", {}).get("name", "?")
         task_url = item.get("task", {}).get("url") or (
-            f"{client._base}/{_normalize_jenkins_path(task_name)}"
+            f"{client.base_url}/{normalize_jenkins_path(task_name)}"
         )
         records.append(
             {
@@ -2098,7 +2103,7 @@ def _cancel_impl(ctx: _Ctx, job: str, build_id: int) -> None:
     try:
         client.cancel(job, build_id)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     click.echo(
@@ -2156,7 +2161,7 @@ def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
     try:
         node_list = client.nodes(depth=1 if stats else 0)
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     built_in = {"master", "Built-In Node"}
@@ -2172,7 +2177,7 @@ def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
             "status": "offline" if n.get("offline", False) else "online",
             "executors": n.get("numExecutors", "?"),
             "labels": [lbl for lbl in raw_labels if lbl != display_name],
-            "url": f"{client._base}/computer/{url_name}/",
+            "url": f"{client.base_url}/computer/{url_name}/",
         }
         if stats:
             record.update(_node_stat_fields(n.get("monitorData") or {}))
@@ -2204,7 +2209,7 @@ def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
     def labels_table(r: dict, i: int) -> str:
         parts = []
         for lbl in r["labels"]:
-            linked = _hyperlink(lbl, f"{client._base}/label/{lbl}/", ctx.colour)
+            linked = _hyperlink(lbl, f"{client.base_url}/label/{lbl}/", ctx.colour)
             if ctx.colour and ctx.seasonal_colours:
                 linked = apply_seasonal_colour(
                     linked, i, calendar=ctx.seasonal_calendar
@@ -2298,7 +2303,7 @@ def whoami(ctx: _Ctx) -> None:
     try:
         data = client.whoami()
     except JenkinsError as exc:
-        _butler_error(str(exc), ctx.colour)
+        butler_error(str(exc), ctx.colour)
         sys.exit(1)
 
     user_id = data.get("id", "anonymous")
@@ -2443,13 +2448,13 @@ def update(ctx: _Ctx) -> None:
     status, current, detail = perform_update(_current_executable_path())
 
     if status is UpdateStatus.UNKNOWN:
-        _butler_error(
+        butler_error(
             "I could not reach GitHub to check for the latest release, sir",
             ctx.colour,
         )
         sys.exit(1)
     if status is UpdateStatus.ERROR:
-        _butler_error(detail, ctx.colour)
+        butler_error(detail, ctx.colour)
         sys.exit(1)
     if status is UpdateStatus.UP_TO_DATE:
         click.echo(
