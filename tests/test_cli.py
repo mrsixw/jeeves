@@ -2600,3 +2600,66 @@ def test_unparsable_env_value_never_aborts_the_run(monkeypatch, jenkins, var):
     result = _invoke("status")
     assert result.exit_code == 0, result.output
     assert "not a valid boolean" not in result.output
+
+
+# ── no-colour config key (issue #117) ──────────────────────────────────────
+
+
+def _status_output(tmp_path, monkeypatch, jenkins, body="", extra_args=()):
+    """Run `jeeves status` with colour forced on, returning the result."""
+    monkeypatch.setattr(cli_mod, "check_for_update", lambda **kw: None)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(body)
+    jenkins.get(api(), json=_STATUS_JSON)
+    return CliRunner().invoke(
+        main, ["--config", str(cfg), *extra_args, "status"], color=True
+    )
+
+
+def test_colour_on_by_default(tmp_path, monkeypatch, jenkins):
+    monkeypatch.delenv("JEEVES_NO_COLOUR", raising=False)
+    result = _status_output(tmp_path, monkeypatch, jenkins)
+    assert result.exit_code == 0, result.output
+    assert "\033[" in result.output
+
+
+def test_no_colour_config_key_disables_colour(tmp_path, monkeypatch, jenkins):
+    monkeypatch.delenv("JEEVES_NO_COLOUR", raising=False)
+    result = _status_output(tmp_path, monkeypatch, jenkins, "no-colour = true\n")
+    assert result.exit_code == 0, result.output
+    assert "\033[" not in result.output
+
+
+def test_no_colour_config_key_false_leaves_colour_on(tmp_path, monkeypatch, jenkins):
+    monkeypatch.delenv("JEEVES_NO_COLOUR", raising=False)
+    result = _status_output(tmp_path, monkeypatch, jenkins, "no-colour = false\n")
+    assert "\033[" in result.output
+
+
+def test_no_colour_flag_beats_a_false_config_key(tmp_path, monkeypatch, jenkins):
+    # Any one of the three switching colour off is enough; none can switch it
+    # back on.
+    monkeypatch.delenv("JEEVES_NO_COLOUR", raising=False)
+    result = _status_output(
+        tmp_path, monkeypatch, jenkins, "no-colour = false\n", ["--no-colour"]
+    )
+    assert "\033[" not in result.output
+
+
+def test_no_colour_env_beats_a_false_config_key(tmp_path, monkeypatch, jenkins):
+    monkeypatch.setenv("JEEVES_NO_COLOUR", "1")
+    result = _status_output(tmp_path, monkeypatch, jenkins, "no-colour = false\n")
+    assert "\033[" not in result.output
+
+
+def test_no_colour_config_key_reaches_the_profile_error(tmp_path, monkeypatch):
+    # colour is computed before the config loads so the load failure can be
+    # reported; the key must still reach the errors raised after that point.
+    monkeypatch.setattr(cli_mod, "check_for_update", lambda **kw: None)
+    monkeypatch.delenv("JEEVES_NO_COLOUR", raising=False)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('no-colour = true\ndefault-profile = "ghost"\n')
+    result = CliRunner().invoke(main, ["--config", str(cfg), "status"], color=True)
+    assert result.exit_code != 0
+    assert "ghost" in result.output
+    assert "\033[" not in result.output
