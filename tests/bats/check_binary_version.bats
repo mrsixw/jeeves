@@ -41,6 +41,34 @@ BINARY
   assert_output_contains "9.9.9"
 }
 
+@test "fails when the binary version merely contains the expected one" {
+  # 1.2.30 is not 1.2.3. A substring comparison says otherwise, and the release
+  # gate that exists to stop a mismatched binary shipping waves it through.
+  given_versions "1.2.3" "${BINARY_NAME}, version 1.2.30"
+
+  run "${REPO_ROOT}/utils/check_binary_version.sh"
+
+  [ "$status" -eq 1 ]
+  assert_output_contains "1.2.30"
+}
+
+@test "fails when the expected version is a suffix of the actual one" {
+  given_versions "1.0.0" "${BINARY_NAME}, version 11.0.0"
+
+  run "${REPO_ROOT}/utils/check_binary_version.sh"
+
+  [ "$status" -eq 1 ]
+}
+
+@test "does not match a version that appears somewhere other than the version field" {
+  # A path, a URL or a copyright line containing the digits must not count.
+  given_versions "1.2.3" "${BINARY_NAME} (built from /home/ci/1.2.3/src), version 9.9.9"
+
+  run "${REPO_ROOT}/utils/check_binary_version.sh"
+
+  [ "$status" -eq 1 ]
+}
+
 @test "fails when the binary cannot report a version at all" {
   printf '1.2.3\n' > "${WORK}/VERSION"
   cat > "${WORK}/dist/${BINARY_NAME}" <<'BINARY'
