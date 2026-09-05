@@ -7,8 +7,18 @@
 
 ## Common Commands
 - `make test` — run tests
-- `make lint` — check linting and formatting
+- `make bats` — run the shell script tests (`npx --yes bats tests/bats`)
+- `make lint` — check linting and formatting (includes `shellcheck` and `spell`)
+- `make shellcheck` — static analysis for every shell source
+- `make spell` — spell check, the same `typos` version CI runs
 - `make format` — auto-fix lint and formatting
+
+## Testing the shell scripts
+- `tests/bats/` covers `install.sh` and everything in `utils/`. Each test runs the real script as a subprocess with `gh`, `git`, `curl`, `tar`, `install` and `python3` stubbed on `PATH` and `HOME` redirected into a temporary directory. Offline, and safe to run anywhere.
+- **If it fakes any part of the system under test, it is a unit test** — these stubs qualify, which is why the suite lives in `tests/`.
+- The helper reads the binary name from `[project.scripts]` in `pyproject.toml`; nothing hardcodes it.
+- Stubs record their arguments: assert *what the script asked for*, not only what it printed. `assert_called_arg` matches a whole argument, so a quoting bug cannot hide behind a flattened command line.
+- Run `make bats` whenever you touch a shell script.
 
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
