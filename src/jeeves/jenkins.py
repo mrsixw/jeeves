@@ -15,8 +15,9 @@ class JenkinsLoginRequired(JenkinsError):
 
     Typical of SSO or reverse-proxy-backed deployments that bounce
     unauthenticated API requests to ``securityRealm/commenceLogin`` until a
-    browser login session exists. The message embeds the base URL so the CLI
-    can offer to open it.
+    browser login session exists. OIDC deployments may gate API tokens the same
+    way, so valid credentials can still be redirected here. The message embeds
+    the base URL so the CLI can offer to open it.
     """
 
 
