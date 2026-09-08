@@ -287,6 +287,19 @@ def test_login_required_interactive_opens_browser(monkeypatch, jenkins):
     assert "opened" in result.output
 
 
+def test_login_required_mentions_oidc_session_gating(monkeypatch, jenkins):
+    _login_redirect_http(jenkins)
+    monkeypatch.setattr(cli_mod, "_isatty", lambda: False)
+
+    result = _invoke("--no-colour", "--no-update-check", "status")
+    assert result.exit_code == 1
+    assert "OIDC session" in result.output
+    assert "allowTokenAccessWithoutOicSession" in result.output
+    assert "administrator" in result.output
+    # "sir" stays a once-per-message affectation.
+    assert result.output.count("sir") == 1
+
+
 # ── jobs ─────────────────────────────────────────────────────────────────────
 
 

@@ -128,6 +128,12 @@ def _butler_error(msg: str, colour: bool) -> None:
             text += f"I've opened {url} for you; do log in and try again."
         else:
             text += f"Kindly visit {url}, log in, and try again."
+        text += (
+            " Should this persist with sound credentials, the controller may be "
+            "gating API tokens behind an active OIDC session. Do ask your Jenkins "
+            "administrator whether token access is permitted without one — often a "
+            "setting named 'allowTokenAccessWithoutOicSession' or its equivalent."
+        )
     elif "Cannot reach Jenkins at" in msg:
         url = msg.split("Cannot reach Jenkins at ", 1)[-1].strip()
         text = (

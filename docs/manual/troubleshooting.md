@@ -41,6 +41,24 @@ If it persists after logging in:
 - Check any reverse proxy in front of Jenkins isn't stripping the
   `Authorization` header — see
   [reverse proxy troubleshooting](https://www.jenkins.io/doc/book/system-administration/reverse-proxy-configuration-troubleshooting/).
+- If the controller uses OIDC, ask your Jenkins administrator to check the
+  OIDC session gating described below.
+
+### OIDC session gating
+
+Where Jenkins authenticates through OIDC, the controller may additionally
+require an *active OIDC session* before it will honour any request — including
+one carrying a perfectly valid username and API token. The symptom is identical
+to the redirect loop above: correct credentials, but every API call bounces to
+the login page. This is especially awkward for non-interactive automation,
+which has no browser session to establish.
+
+Only a Jenkins administrator can change this. Ask them whether API-token access
+is allowed without an active OIDC session. Deployments expose this differently:
+the OIDC plugin commonly offers a setting named
+`allowTokenAccessWithoutOicSession`, while others provide an equivalent option
+or a more general session-gate toggle. The name matters less than the question —
+*can this controller accept API tokens without a browser session?*
 
 ## Update check fails silently
 
