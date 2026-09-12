@@ -14,6 +14,21 @@ from datetime import timedelta as _real_timedelta
 
 import click
 
+__all__ = [
+    "APP_ITEMS",
+    "CALENDARS",
+    "HOLI_RAINBOW",
+    "PRIDE_RAINBOW",
+    "SEASONAL_PALETTES",
+    "THEMES",
+    "THEME_NAMES",
+    "Theme",
+    "apply_seasonal_colour",
+    "colour_grade_number",
+    "echo_err",
+    "get_theme",
+]
+
 # ---------------------------------------------------------------------------
 # Named colour palette
 # ---------------------------------------------------------------------------

@@ -2,13 +2,39 @@
 
 ## Project Overview
 - **jeeves** is a Jenkins CI/CD butler CLI tool with a P.G. Wodehouse theme.
-- Built with Python and Click. Infrastructure: themes, seasonal colours, caching, config files, XDG dirs, shell completions, auto-update checks, CI, release pipeline.
-- Package: `src/jeeves/`. Tests: `tests/`. Package manager: **uv**.
+- Built with Python and Click. Full infrastructure: themes, seasonal colours, caching, config files, XDG dirs, shell completions, auto-update checks, CI, release pipeline.
+- Package structure: code in `src/jeeves/`, tests in `tests/`.
 
-## Common Commands
-- `make test` — run tests
-- `make lint` — check linting and formatting
-- `make format` — auto-fix lint and formatting
+## Project Structure
+- `src/jeeves/` — package source code
+  - `cli.py` — Click group entrypoint with `status`, `queue`, `whoami`, `swatch` commands and `job`, `build`, `node` noun groups mirroring the Jenkins hierarchy (hidden deprecated aliases keep the old flat commands working for one release)
+  - `jenkins.py` — Jenkins HTTP API client (`JenkinsClient`, `JenkinsError`, `normalize_jenkins_path`)
+  - `ui.py` — Terminal themes, seasonal colour system (SEASONAL_PALETTES, PRIDE_RAINBOW, HOLI_RAINBOW, THEMES registry)
+  - `config.py` — TOML configuration loader; `get_jenkins_config()` extracts Jenkins connection settings
+  - `cache.py` — Generic TTL disk cache
+  - `updater.py` — GitHub release update checker
+  - `logger.py` — File logging setup
+  - `xdg.py` — XDG base directory support
+- `tests/` — pytest suite mirroring src modules
+- `pyproject.toml` — project metadata, dependencies, tool config
+- `VERSION` — static file containing the current version string
+- `Makefile` — build, test, lint, format targets
+- `utils/` — helper scripts for release management
+
+## Jenkins API Notes
+- Jenkins HTTP API: append `/api/json` to any URL for JSON data; auth via HTTP Basic (username + API token)
+- `GET /api/json` — server root (mode, nodeDescription, numExecutors, jobs)
+- `GET /job/{name}/api/json` — job details
+- `POST /job/{name}/build` — trigger build (no params)
+- `POST /job/{name}/buildWithParameters` — trigger build with params (send as form body, not query string)
+- `GET /job/{name}/lastBuild/consoleText` — console log (plain text, not JSON)
+- `GET /queue/api/json` — build queue (items[])
+- `POST /job/{name}/{build}/stop` — cancel a running build
+- `GET /job/{name}/{build}/api/json` — build detail; includes `culprits[]` and SCM changes (`changeSets[]` on pipeline builds, single `changeSet` on freestyle)
+- `GET /computer/api/json` — nodes/agents (computer[])
+- `GET /me/api/json` — currently authenticated user (id, fullName)
+- `GET /crumbIssuer/api/json` — CSRF crumb; fetch before first POST, silently skip if unavailable
+- Nested jobs: encode `folder/job` as `job/folder/job/job` in URL paths (use `normalize_jenkins_path`)
 
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
@@ -30,7 +56,7 @@ This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, 
 - Empty queue: `"😴 The queue stands quite empty. Jenkins is evidently at leisure — a rare and precious state of affairs."`
 - No nodes: `"🚪 The household staff appears to have entirely absented themselves. One trusts they haven't all handed in their notice."`
 
-**Errors** — route through `_butler_error(msg, colour)`, prefixed with `🎩`, sent to stderr. Errors retain "sir" for the apologetic butler tone:
+**Errors** — route through `butler_error(msg, colour)`, prefixed with `🎩`, sent to stderr. Errors retain "sir" for the apologetic butler tone:
 - Connection failure: `"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, sir. The line seems entirely dead."`
 - 403 Forbidden: `"Jenkins has turned us away at the door, sir. A 403 — most irregular. One suspects our credentials may not be in order."`
 - 404 Not Found: `"I searched the premises most thoroughly, sir, but the requested resource could not be found. A 404. It has vanished like Bertie's good intentions."`
@@ -49,10 +75,50 @@ This repository provides standardized automated workflows for managing issues. A
 - **Monitor Pull Request CI:** Follow the steps defined in [.agents/skills/monitor-pr/SKILL.md](.agents/skills/monitor-pr/SKILL.md).
 - **Raise a new issue:** Follow the steps defined in [.agents/skills/raise-issue/SKILL.md](.agents/skills/raise-issue/SKILL.md).
 
+## Environment
+- Python >= 3.11
+- Package manager: **uv** (not pip). Use `uv sync`, `uv run`, etc.
+
+## Common Commands
+- `make test` — run tests (`uv run pytest -v`)
+- `make lint` — check linting and formatting
+- `make format` — auto-fix lint and formatting
+- `make build` — build a shiv executable
+
+## Module API contract
+- A leading `_` means "internal to this module". Anything a sibling module
+  imports must not have one, and must appear in that module's `__all__`.
+- Every module in `src/jeeves/` declares `__all__`. Add new public names to it.
+- Reach other modules through their public names only. If you need something a
+  module keeps private, widen that module's API deliberately — rename it and add
+  it to `__all__` — rather than reaching past the underscore. A private name you
+  had to import was never really private.
+- The same applies to third-party libraries: depend on their documented API, not
+  on internals that can change in a patch release.
+- `tests/test_public_api.py` enforces the first two. Tests may still reach into
+  the internals of the module they test — that boundary is not policed.
+
+## Agent Instruction Files
+`AGENTS.md` is the single source of truth. `CLAUDE.md`, `GEMINI.md` and
+`.github/copilot-instructions.md` are symlinks to it, so there is one file to
+edit and drift between them is impossible.
+
+- `AGENTS.md` — canonical. Read natively by Codex and most other agents
+- `CLAUDE.md` → symlink — Claude Code
+- `GEMINI.md` → symlink — Gemini
+- `.github/copilot-instructions.md` → symlink — GitHub Copilot
+
+`AGENTS.md` is the canonical file because Codex, Copilot and others read that
+name natively, and it is the emerging cross-tool convention. The three tools
+that insist on their own filename get a symlink instead of a copy.
+
+On Windows, git checks symlinks out as plain text files containing the target
+path unless `core.symlinks=true` and Developer Mode are both enabled.
+
 ## Commit Messages
 - Use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `ci:`).
 
 ## Code Quality
 - **Before every commit:** `make format && make lint && make test`
 - stdout for data; stderr for progress/warnings/errors
-- No bare `except Exception`
+- No bare `except Exception` — catch specific types

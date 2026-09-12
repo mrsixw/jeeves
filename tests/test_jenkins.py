@@ -8,7 +8,7 @@ from jeeves.jenkins import (
     JenkinsClient,
     JenkinsError,
     JenkinsLoginRequired,
-    _normalize_jenkins_path,
+    normalize_jenkins_path,
 )
 
 BASE = "http://jenkins.example.com"
@@ -26,26 +26,26 @@ def anon_client() -> JenkinsClient:
     return JenkinsClient(BASE)
 
 
-# ── _normalize_jenkins_path ──────────────────────────────────────────────────
+# ── normalize_jenkins_path ──────────────────────────────────────────────────
 
 
 def test_normalize_single_job() -> None:
-    assert _normalize_jenkins_path("my-pipeline") == "job/my-pipeline"
+    assert normalize_jenkins_path("my-pipeline") == "job/my-pipeline"
 
 
 def test_normalize_nested_job() -> None:
-    assert _normalize_jenkins_path("folder/my-pipeline") == "job/folder/job/my-pipeline"
+    assert normalize_jenkins_path("folder/my-pipeline") == "job/folder/job/my-pipeline"
 
 
 def test_normalize_deeply_nested() -> None:
     assert (
-        _normalize_jenkins_path("team/project/deploy")
+        normalize_jenkins_path("team/project/deploy")
         == "job/team/job/project/job/deploy"
     )
 
 
 def test_normalize_strips_leading_slash() -> None:
-    assert _normalize_jenkins_path("/folder/job") == "job/folder/job/job"
+    assert normalize_jenkins_path("/folder/job") == "job/folder/job/job"
 
 
 # ── status ──────────────────────────────────────────────────────────────────
