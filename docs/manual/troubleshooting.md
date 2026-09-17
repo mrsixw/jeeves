@@ -72,3 +72,21 @@ Add `~/.local/bin` to your PATH:
 ```bash
 export PATH="${HOME}/.local/bin:${PATH}"
 ```
+
+## `Another jeeves shadows this install`
+
+The installer put the binary in `~/.local/bin`, but a different copy sits earlier in your `PATH` and wins every invocation. The installer names both paths and exits non-zero rather than reporting a success you cannot use.
+
+This is the usual cause of two otherwise baffling symptoms:
+
+- `jeeves completions bash` fails with `No such command 'completions'` — the shadowing copy predates the subcommand.
+- `jeeves update` appears to do nothing, because it updates a copy you never actually run.
+
+Confirm which binary you are running, then remove the rogue copy:
+
+```bash
+command -v jeeves        # the one that actually runs
+rm "$(command -v jeeves)"
+```
+
+Re-run `install.sh` afterwards to confirm the warning is gone. If you would rather keep the other copy, reorder `PATH` so `~/.local/bin` comes first instead.
