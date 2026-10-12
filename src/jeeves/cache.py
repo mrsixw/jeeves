@@ -8,6 +8,13 @@ import click
 from .logger import logger
 from .xdg import get_cache_dir
 
+__all__ = [
+    "clear_cache",
+    "parse_ttl",
+    "read_cache",
+    "write_cache",
+]
+
 _CACHE_DIR = get_cache_dir()
 _SUFFIX_MAP = {"s": 1, "m": 60, "h": 3600}
 

@@ -4,6 +4,10 @@ SHELL = /bin/bash
 # Pinned to the version the CI spell job uses. Floating it would reintroduce
 # exactly the drift this target exists to remove.
 TYPOS_VERSION := 1.48.0
+# shellcheck-py ships the real shellcheck binary as a wheel, so this is the same
+# tool npx would fetch — but pinned, the way TYPOS_VERSION is, so CI and a
+# laptop run the identical version rather than whatever npm resolves today.
+SHELLCHECK_VERSION := 0.11.0.1
 
 # Every shell source we ship, plus the test helper, which is shell too and just
 # as capable of being wrong.
@@ -47,9 +51,9 @@ docs-lint:
 
 # Static analysis for every shell source.
 shellcheck:
-	npx --yes shellcheck $(SHELL_SOURCES)
+	uvx --from shellcheck-py==$(SHELLCHECK_VERSION) shellcheck $(SHELL_SOURCES)
 
-# The shell test suite. bats and shellcheck arrive via npx, exactly as
+# The shell test suite. bats arrives via npx, exactly as
 # markdownlint-cli2 does above — nothing to install by hand.
 bats:
 	npx --yes bats tests/bats
