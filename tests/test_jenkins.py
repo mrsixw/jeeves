@@ -1,5 +1,7 @@
 """Tests for the Jenkins API client."""
 
+from urllib.parse import parse_qs
+
 import pytest
 import requests
 import requests_mock as req_mock
@@ -7,6 +9,7 @@ import requests_mock as req_mock
 from jeeves.jenkins import (
     JenkinsClient,
     JenkinsError,
+    JenkinsHTTPError,
     JenkinsLoginRequired,
     normalize_jenkins_path,
 )
@@ -606,4 +609,92 @@ def test_whoami_connection_error_raises(client: JenkinsClient) -> None:
     with req_mock.Mocker() as m:
         m.get(f"{BASE}/me/api/json", exc=requests.ConnectionError("refused"))
         with pytest.raises(JenkinsError, match="Cannot reach Jenkins"):
+            client.whoami()
+
+
+# ── get_json ─────────────────────────────────────────────────────────────────
+
+
+def test_get_json_appends_api_json(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        adapter = m.get(
+            f"{BASE}/lockable-resources/api/json", json={"resources": [{"name": "r1"}]}
+        )
+        data = client.get_json("lockable-resources")
+    assert data == {"resources": [{"name": "r1"}]}
+    assert adapter.last_request.qs == {}
+
+
+def test_get_json_passes_params(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        adapter = m.get(f"{BASE}/lockable-resources/api/json", json={})
+        client.get_json("lockable-resources", params={"depth": 2})
+    assert adapter.last_request.qs == {"depth": ["2"]}
+
+
+# ── post_action ──────────────────────────────────────────────────────────────
+
+
+def test_post_action_returns_status_code(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/lockable-resources/reserve", status_code=200)
+        assert client.post_action("lockable-resources/reserve") == 200
+
+
+def test_post_action_sends_form_body(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        adapter = m.post(f"{BASE}/lockable-resources/reserve", status_code=200)
+        client.post_action(
+            "lockable-resources/reserve", data={"resource": "r1", "reason": "testing"}
+        )
+    # params belong in the body, not the query string
+    assert adapter.last_request.qs == {}
+    assert parse_qs(adapter.last_request.text) == {
+        "resource": ["r1"],
+        "reason": ["testing"],
+    }
+
+
+def test_post_action_fetches_crumb_first() -> None:
+    fresh = JenkinsClient(BASE, "admin", "secret")
+    with req_mock.Mocker() as m:
+        m.get(
+            f"{BASE}/crumbIssuer/api/json",
+            json={"crumb": "abc123", "crumbRequestField": "Jenkins-Crumb"},
+        )
+        adapter = m.post(f"{BASE}/lockable-resources/reserve", status_code=200)
+        fresh.post_action("lockable-resources/reserve")
+    assert adapter.last_request.headers["Jenkins-Crumb"] == "abc123"
+
+
+def test_post_action_raises_with_status_attribute(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/lockable-resources/reserve", status_code=423)
+        with pytest.raises(JenkinsHTTPError) as excinfo:
+            client.post_action("lockable-resources/reserve")
+    assert excinfo.value.status == 423
+    # the message the CLI's error copy matches on must not drift
+    assert str(excinfo.value) == "Jenkins returned 423"
+
+
+def test_post_action_allows_listed_status(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/lockable-resources/createResource", status_code=409)
+        assert (
+            client.post_action("lockable-resources/createResource", allow=(409,)) == 409
+        )
+
+
+def test_post_action_still_raises_unlisted_status(client: JenkinsClient) -> None:
+    with req_mock.Mocker() as m:
+        m.post(f"{BASE}/lockable-resources/createResource", status_code=423)
+        with pytest.raises(JenkinsHTTPError, match="423"):
+            client.post_action("lockable-resources/createResource", allow=(409,))
+
+
+def test_http_error_is_a_jenkins_error(client: JenkinsClient) -> None:
+    """Callers predating JenkinsHTTPError must keep catching HTTP failures."""
+    with req_mock.Mocker() as m:
+        m.get(f"{BASE}/me/api/json", status_code=500)
+        with pytest.raises(JenkinsError, match="Jenkins returned 500"):
             client.whoami()

@@ -8,6 +8,7 @@ from requests.auth import HTTPBasicAuth
 __all__ = [
     "JenkinsClient",
     "JenkinsError",
+    "JenkinsHTTPError",
     "JenkinsLoginRequired",
     "normalize_jenkins_path",
 ]
@@ -15,6 +16,20 @@ __all__ = [
 
 class JenkinsError(Exception):
     """Raised when a Jenkins API call fails."""
+
+
+class JenkinsHTTPError(JenkinsError):
+    """Raised when Jenkins answers a request with an error status.
+
+    Carries the status code as data so callers can branch on it rather than
+    parsing prose. The message keeps the historical "Jenkins returned {code}"
+    wording that the CLI's error copy matches on, so every existing
+    ``except JenkinsError`` is unaffected.
+    """
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"Jenkins returned {status}")
+        self.status = status
 
 
 class JenkinsLoginRequired(JenkinsError):
@@ -85,7 +100,7 @@ class JenkinsClient:
         except requests.exceptions.ConnectionError as exc:
             raise JenkinsError(f"Cannot reach Jenkins at {self._base}") from exc
         except requests.exceptions.HTTPError as exc:
-            raise JenkinsError(f"Jenkins returned {resp.status_code}") from exc
+            raise JenkinsHTTPError(resp.status_code) from exc
         except requests.exceptions.RequestException as exc:
             raise JenkinsError(str(exc)) from exc
 
@@ -118,6 +133,35 @@ class JenkinsClient:
             self._fetch_crumb()
         url = f"{self._base}/{path.lstrip('/')}"
         return self._request("POST", url, data=data, timeout=10)
+
+    def get_json(self, path: str, params: dict | None = None) -> dict:
+        """Fetch any Jenkins path's ``/api/json`` payload.
+
+        The public face of the GET transport, for endpoints this client has no
+        typed method for — notably plugin root actions, which are not part of
+        base Jenkins and so have no place in this client's vocabulary.
+        """
+        return self._get(path, params=params)
+
+    def post_action(
+        self, path: str, data: dict | None = None, *, allow: tuple[int, ...] = ()
+    ) -> int:
+        """POST to ``path`` with a CSRF crumb and return the HTTP status code.
+
+        The generic mutator primitive. Jenkins POST endpoints typically answer
+        with a redirect to the previous page, so the status code is the only
+        meaningful part of the reply — hence an ``int`` rather than a response
+        object, which would leak ``requests`` past this module's boundary.
+
+        Codes named in ``allow`` are returned instead of raised, which is how
+        callers treat a "you have already done that" answer as success.
+        """
+        try:
+            return self._post(path, data=data).status_code
+        except JenkinsHTTPError as exc:
+            if exc.status in allow:
+                return exc.status
+            raise
 
     def status(self) -> dict:
         return self._get("")

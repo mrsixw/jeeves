@@ -32,6 +32,7 @@ from .config import (
     write_default_config,
 )
 from .jenkins import JenkinsClient, JenkinsError, normalize_jenkins_path
+from .lockable import LockableError, LockableResources, resource_records
 from .logger import configure as configure_logging
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
@@ -144,6 +145,11 @@ def butler_error(msg: str, colour: bool) -> None:
         text = (
             f"I'm afraid the Jenkins estate at {url} appears to be quite unreachable, "
             "sir. The line seems entirely dead."
+        )
+    elif "Jenkins returned 401" in msg:
+        text = (
+            "Jenkins declined to even open the door, sir. A 401 — no credentials "
+            "were accepted. Do check your profile's username and API token."
         )
     elif "Jenkins returned 403" in msg:
         text = (
@@ -569,6 +575,16 @@ def node_group() -> None:
 @main.group("profile")
 def profile_group() -> None:
     """Manage named connection profiles in the config file."""
+
+
+@main.group("plugin")
+def plugin_group() -> None:
+    """Work with optional Jenkins plugins."""
+
+
+@plugin_group.group("lockable-resources")
+def lockable_group() -> None:
+    """Manage Lockable Resources (requires the lockable-resources plugin)."""
 
 
 # ── profile management ───────────────────────────────────────────────────────
@@ -2296,6 +2312,369 @@ def node_list(ctx: _Ctx, stats: bool, address: bool) -> None:
             "One trusts they haven't all handed in their notice."
         ),
     )
+
+
+# ── lockable resources ───────────────────────────────────────────────────────
+
+_LOCKABLE_STATES = ["free", "reserved", "locked"]
+
+_LOCKABLE_STATE_CELLS = {
+    "free": ("🟢 free", "green"),
+    "reserved": ("🔒 reserved", "yellow"),
+    "locked": ("🔴 locked", "red"),
+}
+
+
+def _lockable_error_text(exc: LockableError, verb: str) -> str:
+    """The butler's wording for a named lockable-resources failure.
+
+    ``_butler_fail`` supplies the 🎩, so none of these carry an emoji.
+    """
+    name = exc.resource
+    if exc.reason == "plugin-missing":
+        return (
+            "The Lockable Resources plugin does not appear to be installed on this "
+            "Jenkins, sir. Without it there are no resources for me to attend to."
+        )
+    if exc.reason == "endpoint-missing":
+        return (
+            "This Jenkins has Lockable Resources, sir, but a vintage too old to "
+            f"accept '{verb}' over the API. Do ask your administrator for a more "
+            "recent plugin."
+        )
+    if exc.reason == "unknown":
+        return f"I find no resource by the name '{name}' on the register, sir."
+    if exc.reason == "busy":
+        if verb == "remove":
+            return (
+                f"'{name}' is still in use, sir — I shan't strike an engaged "
+                "resource from the register."
+            )
+        if exc.holder:
+            return (
+                f"'{name}' is presently in the hands of {exc.holder}, sir. One does "
+                "not simply take it."
+            )
+        return f"'{name}' is presently engaged, sir."
+    if exc.reason == "unauthenticated":
+        return (
+            "Jenkins declined to even open the door, sir. A 401 — no credentials "
+            "were accepted. Do check your profile's username and API token."
+        )
+    text = (
+        "The household does not permit this, sir. A 403 — one suspects the "
+        "requisite permission has not been granted."
+    )
+    if verb == "unreserve":
+        text += " Only the holder, or an administrator, may release a reservation."
+    return text
+
+
+def _lockable(ctx: _Ctx) -> tuple[LockableResources, JenkinsClient]:
+    client = _make_client(ctx)
+    return LockableResources(client), client
+
+
+def _lockable_act(ctx: _Ctx, verb: str, action) -> str:
+    """Run one lockable-resources mutator, translating its failures."""
+    try:
+        return action()
+    except LockableError as exc:
+        _butler_fail(_lockable_error_text(exc, verb), ctx.colour)
+    except JenkinsError as exc:
+        butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _lockable_say(ctx: _Ctx, text: str) -> None:
+    click.echo(click.style(text, fg="green"), color=ctx.colour)
+
+
+def _lockable_columns(ctx: _Ctx, client: JenkinsClient, *, include_details: bool):
+    def name_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["name"], r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    def state_table(r: dict, _i: int) -> str:
+        label, fg = _LOCKABLE_STATE_CELLS.get(r["state"], (r["state"], None))
+        if not ctx.colour:
+            return r["state"]
+        return click.style(label, fg=fg, bold=True)
+
+    def labels_table(r: dict, i: int) -> str:
+        parts = []
+        for lbl in r["labels"]:
+            linked = _hyperlink(lbl, f"{client.base_url}/label/{lbl}/", ctx.colour)
+            if ctx.colour and ctx.seasonal_colours:
+                linked = apply_seasonal_colour(
+                    linked, i, calendar=ctx.seasonal_calendar
+                )
+            parts.append(linked)
+        return ", ".join(parts) if parts else "—"
+
+    columns = [
+        Column("name", "Resource", table=name_table, plain=lambda r: r["name"]),
+        Column("state", "State", table=state_table),
+        Column(
+            "reserved_by",
+            "Held by",
+            table=lambda r, _i: r["reserved_by"] or "—",
+            plain=lambda r: r["reserved_by"],
+        ),
+        Column(
+            "labels",
+            "Labels",
+            table=labels_table,
+            plain=lambda r: ", ".join(r["labels"]),
+        ),
+        Column(
+            "lock_reason",
+            "Reason",
+            table=lambda r, _i: _lockable_reason(r) or "—",
+            plain=_lockable_reason,
+        ),
+    ]
+    if include_details:
+        columns += [
+            Column(
+                "description",
+                "Description",
+                table=lambda r, _i: r["description"] or "—",
+            ),
+            Column("note", "Note", table=lambda r, _i: r["note"] or "—"),
+            Column(
+                "reserved_at",
+                "Reserved",
+                table=lambda r, _i: _lockable_reserved_at(r),
+                plain=lambda r: (
+                    "" if r["reserved_at"] is None else str(r["reserved_at"])
+                ),
+            ),
+            Column("build_name", "Build", table=lambda r, _i: r["build_name"] or "—"),
+            Column(
+                "ephemeral", "Ephemeral", table=lambda r, _i: _yes_no(r["ephemeral"])
+            ),
+            Column("stolen", "Stolen", table=lambda r, _i: _yes_no(r["stolen"])),
+        ]
+    return columns
+
+
+def _lockable_reason(r: dict) -> str:
+    """Why a resource is held: its reservation reason, else the lock's cause."""
+    return r["lock_reason"] or r["lock_cause"]
+
+
+def _lockable_reserved_at(r: dict) -> str:
+    """When a reservation was made, tolerating either payload shape.
+
+    Plugin versions serialise ``reservedTimestamp`` as epoch millis or as an
+    ISO string, so only the former goes through the relative-time helper.
+    """
+    at = r["reserved_at"]
+    if at is None or at == "":
+        return "—"
+    if isinstance(at, bool) or not isinstance(at, int):
+        return str(at)
+    return _relative_time(at)
+
+
+def _yes_no(flag: bool) -> str:
+    return "yes" if flag else "no"
+
+
+@lockable_group.command("list")
+@click.option(
+    "--label",
+    "labels",
+    multiple=True,
+    metavar="NAME",
+    help="Only resources carrying this label; repeat to require several.",
+)
+@click.option(
+    "--state",
+    type=click.Choice(_LOCKABLE_STATES),
+    default=None,
+    help="Only resources in this state.",
+)
+@pass_ctx
+def lockable_list(ctx: _Ctx, labels: tuple[str, ...], state: str | None) -> None:
+    """List the lockable resources and who holds them."""
+    resources, client = _lockable(ctx)
+    records = _lockable_act(ctx, "list", lambda: _lockable_records(resources, client))
+    if labels:
+        wanted = set(labels)
+        records = [r for r in records if wanted <= set(r["labels"])]
+    if state:
+        records = [r for r in records if r["state"] == state]
+    _emit(
+        ctx,
+        records,
+        _lockable_columns(ctx, client, include_details=False),
+        header="🔐 The resources under lock and key.",
+        empty=(
+            "🗝️ Not a single resource is under lock and key. The key cupboard "
+            "stands conspicuously empty."
+        ),
+        compress_col=1,
+    )
+
+
+def _lockable_records(resources: LockableResources, client: JenkinsClient):
+    return resource_records(resources.resources(), client.base_url)
+
+
+@lockable_group.command("show")
+@click.argument("name", metavar="RESOURCE")
+@pass_ctx
+def lockable_show(ctx: _Ctx, name: str) -> None:
+    """Show one lockable resource in full.
+
+    RESOURCE is the resource name as it appears on the register.
+    """
+    resources, client = _lockable(ctx)
+
+    def _lookup() -> dict:
+        raw = resources.resource(name)
+        if raw is None:
+            raise LockableError("unknown", name)
+        return raw
+
+    raw = _lockable_act(ctx, "show", _lookup)
+    _emit(
+        ctx,
+        resource_records([raw], client.base_url),
+        _lockable_columns(ctx, client, include_details=True),
+        header=f"🔐 Resource '{name}'.",
+        empty=f"🤷 I find no resource by the name '{name}' on the register.",
+    )
+
+
+@lockable_group.command("add")
+@click.argument("name", metavar="RESOURCE")
+@click.option("--description", default="", metavar="TEXT", help="Free-text note.")
+@click.option(
+    "--label",
+    "labels",
+    multiple=True,
+    metavar="NAME",
+    help="Label to assign; repeat for several.",
+)
+@pass_ctx
+def lockable_add(
+    ctx: _Ctx, name: str, description: str, labels: tuple[str, ...]
+) -> None:
+    """Add a resource to the register.
+
+    RESOURCE is the name to give it.
+    """
+    resources, _client = _lockable(ctx)
+    outcome = _lockable_act(
+        ctx, "add", lambda: resources.create(name, description, labels)
+    )
+    if outcome == "already":
+        _lockable_say(
+            ctx, f"📝 '{name}' is already in the register; nothing wanted doing."
+        )
+    else:
+        _lockable_say(ctx, f"📝 I've entered '{name}' in the register.")
+
+
+@lockable_group.command("remove")
+@click.argument("name", metavar="RESOURCE")
+@click.option(
+    "--yes",
+    "assume_yes",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@pass_ctx
+def lockable_remove(ctx: _Ctx, name: str, assume_yes: bool) -> None:
+    """Remove a resource from the register.
+
+    RESOURCE is the resource to strike off. Prompts first on a terminal.
+    """
+    resources, _client = _lockable(ctx)
+    if not assume_yes and _isatty():
+        question = f"🛎️ Strike '{name}' from the register, sir?"
+        if not click.confirm(question, default=False):
+            click.echo("🫖 Very wise. I've left the register as it was.", err=True)
+            return
+    outcome = _lockable_act(ctx, "remove", lambda: resources.delete(name))
+    if outcome == "already":
+        _lockable_say(
+            ctx, f"🗑️ '{name}' was never on the register; nothing wanted doing."
+        )
+    else:
+        _lockable_say(ctx, f"🗑️ '{name}' has been struck from the register.")
+
+
+@lockable_group.command("reserve")
+@click.argument("name", metavar="RESOURCE")
+@click.option("--reason", default="", metavar="TEXT", help="Why you want it.")
+@pass_ctx
+def lockable_reserve(ctx: _Ctx, name: str, reason: str) -> None:
+    """Reserve a resource in your name.
+
+    RESOURCE is the resource to reserve. The reservation stands until released.
+    """
+    resources, _client = _lockable(ctx)
+    outcome = _lockable_act(ctx, "reserve", lambda: resources.reserve(name, reason))
+    if outcome == "already":
+        _lockable_say(ctx, f"🔐 '{name}' is already reserved in your name.")
+    else:
+        _lockable_say(ctx, f"🔐 '{name}' is reserved in your name.")
+
+
+@lockable_group.command("unreserve")
+@click.argument("name", metavar="RESOURCE")
+@pass_ctx
+def lockable_unreserve(ctx: _Ctx, name: str) -> None:
+    """Release a reservation you hold.
+
+    RESOURCE is the resource to release.
+    """
+    resources, _client = _lockable(ctx)
+    outcome = _lockable_act(ctx, "unreserve", lambda: resources.unreserve(name))
+    if outcome == "already":
+        _lockable_say(ctx, f"🔓 '{name}' is already at liberty.")
+    else:
+        _lockable_say(ctx, f"🔓 '{name}' is released back to the household.")
+
+
+@lockable_group.command("unlock")
+@click.argument("name", metavar="RESOURCE")
+@pass_ctx
+def lockable_unlock(ctx: _Ctx, name: str) -> None:
+    """Unlock a resource a build is holding.
+
+    RESOURCE is the resource to unlock.
+    """
+    resources, _client = _lockable(ctx)
+    outcome = _lockable_act(ctx, "unlock", lambda: resources.unlock(name))
+    if outcome == "already":
+        _lockable_say(ctx, f"🔓 '{name}' is already at liberty.")
+    else:
+        _lockable_say(ctx, f"🔓 I've unlocked '{name}'.")
+
+
+@lockable_group.command("reset")
+@click.argument("name", metavar="RESOURCE")
+@pass_ctx
+def lockable_reset(ctx: _Ctx, name: str) -> None:
+    """Clear a resource's locks, reservations and queue.
+
+    RESOURCE is the resource to restore to good order.
+    """
+    resources, _client = _lockable(ctx)
+    outcome = _lockable_act(ctx, "reset", lambda: resources.reset(name))
+    if outcome == "already":
+        _lockable_say(ctx, f"🧹 '{name}' was already in good order.")
+    else:
+        _lockable_say(ctx, f"🧹 '{name}' has been restored to good order.")
 
 
 # ── whoami ───────────────────────────────────────────────────────────────────
