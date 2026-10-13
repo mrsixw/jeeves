@@ -69,6 +69,44 @@ jeeves node list --address       # + each agent's launcher host/IP
 jeeves --format json node list --stats   # raw byte/ms values for scripting
 ```
 
+## Lockable resources
+
+Lockable resources are not part of base Jenkins — they come from the
+[`lockable-resources`](https://plugins.jenkins.io/lockable-resources/) plugin,
+so these commands live under the `plugin` group. On a Jenkins without the
+plugin they all decline politely rather than failing obscurely.
+
+```bash
+jeeves plugin lockable-resources list                      # the whole register
+jeeves plugin lockable-resources list --state locked       # only what a build holds
+jeeves plugin lockable-resources list --label db --label prod   # both labels required
+jeeves plugin lockable-resources show staging-db           # one resource, in full
+
+jeeves plugin lockable-resources reserve staging-db --reason "schema migration"
+jeeves plugin lockable-resources unreserve staging-db      # release your own reservation
+jeeves plugin lockable-resources unlock staging-db         # release a build's lock
+jeeves plugin lockable-resources reset staging-db          # clear locks, reservations and queue
+
+jeeves plugin lockable-resources add rig-02 --description "spare rig" --label hardware
+jeeves plugin lockable-resources remove rig-02             # prompts first on a terminal
+jeeves plugin lockable-resources remove rig-02 --yes       # ...or do not
+```
+
+Every verb is idempotent: a resource already in the state you asked for says so
+and exits 0, so these are safe to put in a script.
+
+```console
+$ jeeves plugin lockable-resources reserve staging-db
+🎩 'staging-db' is presently in the hands of bertie, sir. One does not simply take it.
+
+$ jeeves plugin lockable-resources list
+🎩 The Lockable Resources plugin does not appear to be installed on this Jenkins, sir. Without it there are no resources for me to attend to.
+```
+
+Reserving, releasing and creating each need their own Jenkins permission
+(`RESERVE`, `UNLOCK` and `CONFIGURE` respectively), and releasing a reservation
+is restricted to its holder or an administrator.
+
 ## Config file
 
 ```bash
