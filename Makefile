@@ -1,6 +1,19 @@
 .ONESHELL:
 SHELL = /bin/bash
 
+# Required because of .ONESHELL above, which hands the whole recipe to one
+# shell invocation. Without -e that shell runs on past a failing command and
+# make sees only the LAST command's exit status, so a recipe can fail halfway
+# and still report success — `make lint` would pass with a failing `ruff` so
+# long as the `black` after it succeeded.
+#
+# It does not reproduce on macOS, which is the trap: Apple ships GNU Make
+# 3.81, which predates both .ONESHELL and .SHELLFLAGS (3.82) and ignores them,
+# running each line in its own shell and checking each status. So the bug is
+# invisible locally and live in CI. On 3.81 this line is inert; on 3.82+ it
+# restores stop-on-first-failure. See issue #139.
+.SHELLFLAGS := -ec
+
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
