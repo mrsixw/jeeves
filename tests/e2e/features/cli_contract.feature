@@ -7,10 +7,6 @@ Feature: jeeves CLI contract
   Background:
     Given no Jenkins connection is configured
 
-  Scenario: TEMPORARY deliberate failure to prove the CI gate fails red
-    When I run `jeeves --version`
-    Then the exit code is 99
-
   Scenario: Version matches the VERSION file
     When I run `jeeves --version`
     Then the exit code is 0
