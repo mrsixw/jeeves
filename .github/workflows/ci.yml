@@ -68,6 +68,17 @@ jobs:
       - name: Verify binary version
         run: utils/check_binary_version.sh
 
+      # Published so the end-to-end job can test these exact bits rather than
+      # rebuilding its own. Same commit, same command — but a rebuild would
+      # not prove the artifact survives the upload/download round trip, and
+      # that round trip is what the release downloads too.
+      - name: Publish binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: jeeves-zipapp
+          path: dist/jeeves
+          if-no-files-found: error
+
   # What version would merging this actually release? The release job only runs
   # on pushes to main, so without this the answer arrives after the tag has been
   # cut. In the sibling breakfast repo a commit marked itself breaking with a
@@ -180,10 +191,45 @@ jobs:
           uv run jeeves completions zsh | grep -q "_JEEVES_COMPLETE"
           uv run jeeves completions fish | grep -q "_JEEVES_COMPLETE"
 
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "latest"
+
+      # Into dist/, which is where JEEVES_E2E_BINARY defaults to looking.
+      - name: Download binary
+        uses: actions/download-artifact@v8
+        with:
+          name: jeeves-zipapp
+          path: dist
+
+      # Artifacts travel as zips, which do not preserve the executable bit.
+      - name: Restore executable bit
+        run: chmod +x dist/jeeves
+
+      # e2e-ci deliberately does not rebuild: it runs the downloaded artifact,
+      # fails rather than skips when it is missing, and asserts a non-zero
+      # number of tests actually ran.
+      - name: Run end-to-end suite
+        run: make e2e-ci
+
   release:
     if: "github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
     runs-on: ubuntu-latest
-    needs: [build, man, completions]
+    needs: [build, e2e, man, completions]
     permissions:
       contents: write
     steps:

@@ -5,7 +5,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 
-.PHONY: build release test lint docs-lint format man completions install uninstall
+.PHONY: build release test e2e e2e-ci lint docs-lint format man completions install uninstall
 
 .venv:
 	uv venv .venv
@@ -28,6 +28,25 @@ release: build
 test: .venv
 	uv sync --extra test
 	uv run pytest -v
+
+# End-to-end: drives the built zipapp as a subprocess. Builds first so the
+# binary under test is always current. `-m e2e` on the command line overrides
+# the `-m 'not e2e'` in pyproject.toml.
+e2e: build
+	uv sync --extra test
+	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e
+
+# CI variant: deliberately does NOT depend on build, so it runs against the
+# artifact the build job produced — the same bits the release ships. The
+# REQUIRE flag turns "no binary" into a failure rather than a skip, so the
+# suite cannot quietly rot to green. The test count check is the second half
+# of that guarantee: a collection error would otherwise also report success.
+e2e-ci: .venv
+	uv sync --extra test
+	mkdir -p dist
+	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e \
+		--junitxml=dist/e2e-results.xml
+	uv run python utils/assert_tests_ran.py dist/e2e-results.xml
 
 lint: .venv docs-lint
 	uv sync --extra lint
