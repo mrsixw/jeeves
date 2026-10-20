@@ -32,6 +32,7 @@ import pytest
 # is invisible until its namespace is pulled in here. Replace these with named
 # imports and every scenario fails to find its steps.
 from .provision import (
+    ADMIN_PASSWORD,
     ADMIN_USER,
     NotReachable,
     ProvisionError,
@@ -217,8 +218,13 @@ def jenkins_container(container_runtime):
             base_url,
             timeout=float(os.environ.get("JEEVES_E2E_BOOT_TIMEOUT", "180")),
             diagnostics=lambda: container_runtime.logs(name),
+            # The same endpoint and credentials the readiness poll requires,
+            # so a broken security realm cannot masquerade as a host
+            # networking problem.
             classify=lambda: container_runtime.running(name)
-            and container_runtime.serves_internally(name, 8080),
+            and container_runtime.serves_internally(
+                name, 8080, "/api/json", f"{ADMIN_USER}:{ADMIN_PASSWORD}"
+            ),
         )
         token = mint_api_token(base_url)
         jobs = {}

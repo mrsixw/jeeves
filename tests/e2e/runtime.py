@@ -121,7 +121,7 @@ class ContainerRuntime:
         completed = self.run(verb, check=False, timeout=30)
         return name in (completed.stdout or "")
 
-    def serves_internally(self, name: str, port: int) -> bool:
+    def serves_internally(self, name: str, port: int, path: str, auth: str) -> bool:
         """Does the container answer HTTP on ``port`` from inside itself?
 
         This is the discriminator that matters. If a service answers inside
@@ -129,6 +129,17 @@ class ContainerRuntime:
         host's routing, not the service — and the suite should skip with that
         explanation rather than report a dozen failures or sit through a boot
         timeout blaming the application.
+
+        It must probe **the same thing the readiness poll requires**, and with
+        the same credentials. Probing something weaker — an unauthenticated
+        login page, say — would classify a broken security realm as a host
+        networking problem and skip locally, hiding exactly the kind of
+        configuration bug this fixture is most likely to have.
+
+        ``curl`` is present in the official Debian-based jenkins/jenkins
+        image. If that ever stops being true this returns False, which
+        degrades to the honest "not ready" failure with the container logs
+        attached — not to a wrong answer.
         """
         completed = self.run(
             "exec",
@@ -140,10 +151,12 @@ class ContainerRuntime:
             "-w",
             "%{http_code}",
             "--max-time",
-            "5",
-            f"http://127.0.0.1:{port}/login",
+            "10",
+            "-u",
+            auth,
+            f"http://127.0.0.1:{port}{path}",
             check=False,
-            timeout=40,
+            timeout=60,
         )
         return (completed.stdout or "").strip().endswith("200")
 

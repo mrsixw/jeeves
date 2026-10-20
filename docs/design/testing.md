@@ -249,14 +249,21 @@ One detail that will otherwise cost an afternoon: artifacts travel as zips and
 | `casc.yaml` | the Configuration-as-Code that configures the *instance* |
 | `jobs/*.xml` | the `config.xml` for each seed job, created after boot |
 
-### Pin the plugins, not just the image
+### Pin the plugins, not just the image — and all of them
 
 The base image is pinned by **digest**, not tag, because a tag can be
-repointed and a digest cannot. That alone is not enough:
-`jenkins-plugin-cli` resolves latest-compatible by default, so the same
-Dockerfile would quietly produce a different Jenkins next month. Silent
-version drift is the class of bug this suite exists to catch, so it must not
-be in the suite itself.
+repointed and a digest cannot.
+
+Naming three plugins with versions is still not reproducibility.
+`jenkins-plugin-cli` resolves **transitive dependencies** to
+latest-compatible, and those three pull in ~54 more at whatever versions are
+current that day. So `plugins.txt` holds the **entire resolved set**, 57
+entries, every one pinned — the direct asks at the top, the transitive closure
+below.
+
+Silent version drift is the class of bug this suite exists to catch, so it
+must not be in the suite itself. `plugins.txt` carries the command to
+regenerate the list from a built image after changing a direct dependency.
 
 ### Instance config versus per-run state
 
@@ -325,6 +332,13 @@ The suite tells them apart by asking **from inside the container** whether
 Jenkins is serving. If it answers there but not through the published port, the
 fault is the host's routing: that raises `NotReachable`, which skips locally
 and — under `JEEVES_E2E_REQUIRE_DOCKER`, as CI sets — fails like anything else.
+
+That probe must ask for **the same endpoint, with the same credentials, that
+the readiness poll requires** — authenticated `/api/json`, not the login page.
+Probing something weaker would classify a broken security realm as a host
+networking problem and skip locally, which would hide precisely the kind of
+Configuration-as-Code bug this fixture is most prone to: both JCasC errors
+above were security-realm or authorisation errors.
 
 This is not hypothetical. Apple's `container` runtime on macOS 27 builds and
 boots the image happily, and the guest has working outbound networking, but
