@@ -18,6 +18,19 @@ make lint     # must exit clean
 make test     # all tests must pass
 ```
 
+`make test` runs the mocked suites and is offline and fast. The end-to-end
+suite is separate, because it builds the zipapp and drives it as a real
+subprocess:
+
+```bash
+make e2e      # builds, then runs tests/e2e
+```
+
+CI runs it on every push, and `release` is gated behind it. Which layer a new
+test belongs in — and why that boundary is worth keeping — is set out in
+[docs/design/testing.md](docs/design/testing.md). The short version: **if it
+fakes any part of the system under test, it is a unit test.**
+
 ## Conventional commits
 
 Use `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `ci:` prefixes.
