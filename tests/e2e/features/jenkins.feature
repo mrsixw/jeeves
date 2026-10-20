@@ -18,9 +18,9 @@ Feature: jeeves against a real Jenkins
   # ── connection and authentication ─────────────────────────────────────────
 
   # The butler's verdict is an info line, so it belongs on stderr, and the
-  # table of facts belongs on stdout. Asserting both is the point: this is the
-  # scenario that proves the stream split on a command that emits to each at
-  # once, which CliRunner cannot show.
+  # table of facts belongs on stdout. Asserting both is the point: this proves
+  # the split on a command that emits to each at once, over the real file
+  # descriptors rather than through Click's capture.
   Scenario: Status reports a healthy estate on the right streams
     When I run `jeeves --no-colour status`
     Then the exit code is 0

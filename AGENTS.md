@@ -92,8 +92,8 @@ This repository provides standardized automated workflows for managing issues. A
 **If it fakes any part of the system under test, it is a unit test** — it
 belongs in `tests/`, not `tests/e2e/`. Faking means `monkeypatch`, but equally
 `requests-mock` or `CliRunner`. `tests/e2e/` drives the built binary as a real
-subprocess, which is the only layer that can see true exit codes, genuinely
-separate stdout and stderr, and the zipapp's own packaging.
+subprocess, which is the only layer that sees true process exit codes, the real
+stdout and stderr file descriptors, and the zipapp's own packaging.
 
 Before adding an e2e scenario, ask what a unit test structurally *cannot* see.
 If the answer is "nothing", it belongs in `tests/test_cli.py`.

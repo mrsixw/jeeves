@@ -38,10 +38,13 @@ returns, and a crumb we never sent.
 ### What end-to-end buys that the other layers cannot
 
 - Real process **exit codes**, not `Result.exit_code`.
-- Genuinely separate **stdout and stderr**. `CliRunner` merges them, so the
-  project's stream discipline — "stdout for data, stderr for everything else" —
-  is otherwise unenforceable. A butler error landing on stdout would corrupt
-  `--format json` for anything piping us, and no mocked test would notice.
+- **The real OS file descriptors.** Click's `CliRunner` does separate
+  `result.stdout` from `result.stderr` — the mocked suite uses both — but it
+  only sees what passes through Click's own output functions. A subprocess sees
+  everything on the actual file descriptors: the shiv preamble, a Python
+  warning, a dependency printing directly to `sys.__stdout__`. Anything of
+  that kind landing on stdout would corrupt `--format json` for a caller
+  piping us, and no in-process test would notice.
 - The **shiv zipapp itself**: packaging, the `utils/preamble.py` Python-version
   guard, the console entry point, and the version it reports.
 - Real **files on disk** — the config `--init-config` writes, the cache, the log.
