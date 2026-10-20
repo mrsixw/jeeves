@@ -187,8 +187,6 @@ def jenkins_container(container_runtime):
     """
     image = "jeeves-e2e-jenkins:local"
     name = f"jeeves-e2e-{os.getpid()}"
-    port = free_port()
-    base_url = f"http://127.0.0.1:{port}"
 
     container_runtime.build(
         context=str(DOCKER_DIR),
@@ -196,6 +194,20 @@ def jenkins_container(container_runtime):
         tag=image,
         timeout=int(os.environ.get("JEEVES_E2E_BUILD_TIMEOUT", "900")),
     )
+
+    # Clear any container left behind by a run that died before its teardown.
+    # The name carries our pid so a collision is unlikely, but pids are
+    # recycled, and a stale container would fail the start with a name clash
+    # that says nothing about the real problem.
+    container_runtime.stop(name)
+
+    # Claim the port *after* the build, not before. A first build pulls the
+    # base image and installs plugins, which can run to minutes — far too long
+    # to hold a reservation that is only advisory anyway, since free_port()
+    # closes the socket before returning it.
+    port = free_port()
+    base_url = f"http://127.0.0.1:{port}"
+
     container_runtime.start_detached(
         image=image, name=name, host_port=port, container_port=8080
     )

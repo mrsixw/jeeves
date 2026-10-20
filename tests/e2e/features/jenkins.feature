@@ -17,10 +17,16 @@ Feature: jeeves against a real Jenkins
 
   # ── connection and authentication ─────────────────────────────────────────
 
-  Scenario: Status reports a healthy estate
+  # The butler's verdict is an info line, so it belongs on stderr, and the
+  # table of facts belongs on stdout. Asserting both is the point: this is the
+  # scenario that proves the stream split on a command that emits to each at
+  # once, which CliRunner cannot show.
+  Scenario: Status reports a healthy estate on the right streams
     When I run `jeeves --no-colour status`
     Then the exit code is 0
-    And stdout contains "fine form"
+    And stderr contains "fine form"
+    And stdout contains "Executors"
+    And stdout does not contain "fine form"
 
   Scenario: Whoami reports the authenticated user
     When I run `jeeves --no-colour whoami`
@@ -84,7 +90,8 @@ Feature: jeeves against a real Jenkins
     And stdout contains "greeting=from-e2e"
     When I run `jeeves --no-colour build list e2e-freestyle`
     Then the exit code is 0
-    And stdout contains "SUCCESS"
+    # The table renders the result, it does not echo the API's raw "SUCCESS".
+    And stdout contains "Success"
     # blame asks for changeSets[] and changeSet together, because pipeline
     # builds report the former and freestyle the latter. The fixture jobs have
     # no SCM, so the change set is empty — what this proves is that jeeves
