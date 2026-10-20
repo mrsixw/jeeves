@@ -31,10 +31,22 @@ import pytest
 # conftest and test modules for fixtures, so a step defined in a plain module
 # is invisible until its namespace is pulled in here. Replace these with named
 # imports and every scenario fails to find its steps.
+from .provision import (
+    ADMIN_USER,
+    NotReachable,
+    ProvisionError,
+    create_job,
+    free_port,
+    mint_api_token,
+    wait_until_ready,
+)
+from .runtime import RuntimeUnavailable, detect_runtime
+from .steps.jenkins import *  # noqa: F401,F403
 from .steps.steps import *  # noqa: F401,F403
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BINARY = REPO_ROOT / "dist" / "jeeves"
+DOCKER_DIR = Path(__file__).parent / "docker"
 
 # The zipapp shebang is `#!/usr/bin/env python3`, so PATH is load-bearing.
 # Everything else is deliberately withheld: starting from an empty environment
@@ -128,6 +140,122 @@ def jeeves_binary():
     if not os.access(path, os.X_OK):
         pytest.fail(f"{path} is not executable — `chmod +x` it after download")
     return path
+
+
+@dataclass(frozen=True)
+class JenkinsFixture:
+    """A running fixture Jenkins, and the credentials to reach it."""
+
+    base_url: str
+    user: str
+    token: str
+    freestyle_job: str
+    pipeline_job: str
+    folder: str
+    nested_job: str
+
+    @property
+    def nested_path(self) -> str:
+        """The job path a user would type: ``folder/job``."""
+        return f"{self.folder}/{self.nested_job}"
+
+
+@pytest.fixture(scope="session")
+def container_runtime():
+    """The container CLI, or skip/fail depending on JEEVES_E2E_REQUIRE_DOCKER.
+
+    Locally this skips, so the suite is harmless on a machine without a
+    runtime. In CI the flag makes it a hard failure, because a job that skips
+    everything reports success and a green check that exercised nothing is
+    worse than no check at all.
+    """
+    try:
+        return detect_runtime()
+    except RuntimeUnavailable as exc:
+        if os.environ.get("JEEVES_E2E_REQUIRE_DOCKER"):
+            pytest.fail(str(exc))
+        pytest.skip(str(exc))
+
+
+@pytest.fixture(scope="session")
+def jenkins_container(container_runtime):
+    """Build, boot and furnish a real Jenkins, once per session.
+
+    Session-scoped because boot is tens of seconds — far too slow to pay per
+    scenario. The cost of that choice is shared mutable state, which scenarios
+    handle by namespacing anything they create rather than relying on cleanup.
+    """
+    image = "jeeves-e2e-jenkins:local"
+    name = f"jeeves-e2e-{os.getpid()}"
+    port = free_port()
+    base_url = f"http://127.0.0.1:{port}"
+
+    container_runtime.build(
+        context=str(DOCKER_DIR),
+        dockerfile=str(DOCKER_DIR / "Dockerfile"),
+        tag=image,
+        timeout=int(os.environ.get("JEEVES_E2E_BUILD_TIMEOUT", "900")),
+    )
+    container_runtime.start_detached(
+        image=image, name=name, host_port=port, container_port=8080
+    )
+
+    try:
+        wait_until_ready(
+            base_url,
+            timeout=float(os.environ.get("JEEVES_E2E_BOOT_TIMEOUT", "180")),
+            diagnostics=lambda: container_runtime.logs(name),
+            classify=lambda: container_runtime.running(name)
+            and container_runtime.serves_internally(name, 8080),
+        )
+        token = mint_api_token(base_url)
+        jobs = {}
+        for kind in ("freestyle", "pipeline"):
+            job_name = f"e2e-{kind}"
+            create_job(
+                base_url,
+                token=token,
+                name=job_name,
+                config_xml=(DOCKER_DIR / "jobs" / f"{kind}.xml").read_text(),
+            )
+            jobs[kind] = job_name
+
+        # A folder with a job inside it, so a scenario can prove
+        # normalize_jenkins_path's /job/<folder>/job/<name> encoding against a
+        # real Jenkins. A mock would accept whatever shape we invented.
+        folder = "e2e-folder"
+        create_job(
+            base_url,
+            token=token,
+            name=folder,
+            config_xml=(DOCKER_DIR / "jobs" / "folder.xml").read_text(),
+        )
+        create_job(
+            base_url,
+            token=token,
+            name="nested",
+            config_xml=(DOCKER_DIR / "jobs" / "freestyle.xml").read_text(),
+            folder=folder,
+        )
+
+        yield JenkinsFixture(
+            base_url=base_url,
+            user=ADMIN_USER,
+            token=token,
+            freestyle_job=jobs["freestyle"],
+            pipeline_job=jobs["pipeline"],
+            folder=folder,
+            nested_job="nested",
+        )
+    except NotReachable as exc:
+        # Must precede the ProvisionError branch — NotReachable subclasses it.
+        if os.environ.get("JEEVES_E2E_REQUIRE_DOCKER"):
+            pytest.fail(str(exc))
+        pytest.skip(str(exc))
+    except ProvisionError as exc:
+        pytest.fail(f"could not provision the fixture Jenkins: {exc}")
+    finally:
+        container_runtime.stop(name)
 
 
 @pytest.fixture

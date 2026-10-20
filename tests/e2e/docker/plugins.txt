@@ -1,0 +1,27 @@
+# Plugins baked into the end-to-end Jenkins image, with versions pinned.
+#
+# Pinning the base image digest is not enough on its own: jenkins-plugin-cli
+# resolves latest-compatible by default, so the same Dockerfile would quietly
+# produce a different Jenkins next month. Silent version drift is the class of
+# bug this suite exists to catch, so it must not be in the suite itself.
+#
+# Keep this list minimal — every plugin is boot time, and boot time is paid
+# once per test session.
+#
+# To refresh: check https://updates.jenkins.io/current/update-center.actual.json
+# and confirm each plugin's requiredCore is satisfied by the image in the
+# Dockerfile. Verified against core 2.580.1.
+
+# Configures the instance at boot: the admin user and the security realm.
+configuration-as-code:2136.veb_3a_554550b_f
+
+# Pipeline. Needed because pipeline builds report SCM changes under
+# changeSets[] while freestyle builds use a single changeSet, and
+# JenkinsClient.changes() requests both — so only two job types prove we
+# read whichever Jenkins actually sends.
+workflow-aggregator:608.v67378e9d3db_1
+
+# Folders, so a scenario can exercise normalize_jenkins_path against a real
+# Jenkins. Nested paths encode as /job/<folder>/job/<name> — a non-obvious
+# transformation that a mock will accept whatever shape we invent.
+cloudbees-folder:6.1106.v3a_d9a_6d2465e

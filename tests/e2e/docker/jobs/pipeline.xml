@@ -1,0 +1,43 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  A pipeline job for the end-to-end suite. See jobs/freestyle.xml for why both
+  job types exist.
+
+  The script is inlined rather than pulled from SCM, so the fixture needs no
+  git server and no credentials. That does mean this job produces an empty
+  changeSets[] — proving the *shape* jeeves reads, not a populated one. A
+  scenario asserting real commits needs an SCM-backed job, which is tracked
+  separately; see docs/design/testing.md.
+-->
+<flow-definition plugin="workflow-job">
+  <description>jeeves end-to-end fixture: pipeline</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>GREETING</name>
+          <description>Echoed to the console so a scenario can read it back.</description>
+          <defaultValue>default-greeting</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>pipeline {
+    agent any
+    stages {
+        stage('Greet') {
+            steps {
+                echo "greeting=${params.GREETING}"
+                echo "pipeline fixture build ${env.BUILD_NUMBER}"
+            }
+        }
+    }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

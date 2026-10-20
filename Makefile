@@ -5,7 +5,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 
-.PHONY: build release test e2e e2e-ci lint docs-lint format man completions install uninstall
+.PHONY: build release test e2e e2e-offline e2e-ci lint docs-lint format man completions install uninstall
 
 .venv:
 	uv venv .venv
@@ -36,6 +36,12 @@ e2e: build
 	uv sync --extra test
 	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e
 
+# The container-free subset. Useful when you have no container runtime, or
+# want the fast feedback without waiting on a Jenkins boot.
+e2e-offline: build
+	uv sync --extra test
+	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m "e2e and not docker" tests/e2e
+
 # CI variant: deliberately does NOT depend on build, so it runs against the
 # artifact the build job produced — the same bits the release ships. The
 # REQUIRE flag turns "no binary" into a failure rather than a skip, so the
@@ -44,8 +50,8 @@ e2e: build
 e2e-ci: .venv
 	uv sync --extra test
 	mkdir -p dist
-	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e \
-		--junitxml=dist/e2e-results.xml
+	JEEVES_E2E_REQUIRE=1 JEEVES_E2E_REQUIRE_DOCKER=1 \
+		uv run pytest -v -m e2e tests/e2e --junitxml=dist/e2e-results.xml
 	uv run python utils/assert_tests_ran.py dist/e2e-results.xml
 
 lint: .venv docs-lint

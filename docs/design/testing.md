@@ -8,7 +8,7 @@ How jeeves is tested, and — more usefully — which layer a new test belongs i
 | --- | --- | --- | --- | --- |
 | Unit | `tests/test_*.py` | no | no | `make test` |
 | CLI | `tests/test_cli.py` | no (in-process `CliRunner`) | no (mocked) | `make test` |
-| End-to-end | `tests/e2e/` | **yes**, the shiv zipapp as a subprocess | not yet — see below | `make e2e` |
+| End-to-end | `tests/e2e/` | **yes**, the shiv zipapp as a subprocess | **yes**, a real one in a container | `make e2e` |
 
 ### The rule
 
@@ -50,12 +50,18 @@ returns, and a crumb we never sent.
 ## Running them
 
 ```bash
-make test   # unit + CLI. Offline, fast. e2e is excluded by default.
-make e2e    # builds the zipapp, then runs everything in tests/e2e
-make e2e-ci # CI variant: uses an already-built binary, fails instead of skipping
+make test        # unit + CLI. Offline, fast. e2e is excluded by default.
+make e2e         # builds the zipapp, then runs everything in tests/e2e
+make e2e-offline # only the scenarios that need no container
+make e2e-ci      # CI variant: uses an already-built binary, fails instead of skipping
 
-uv run pytest -v -m e2e tests/e2e   # if the binary is already built
+uv run pytest -v -m "e2e and not docker" tests/e2e   # the container-free subset
 ```
+
+Scenarios split in two by tag. The `cli_contract.feature` scenarios need
+nothing but the binary. Everything in `jenkins.feature` carries `@docker` and
+costs one container boot per session, so `make e2e-offline` is the fast loop
+while you are working on something unrelated to Jenkins.
 
 `make test` stays fast because `addopts = "-m 'not e2e'"` in `pyproject.toml`.
 A bare `uv run pytest` inherits that. `make e2e` passes `-m e2e` on the command
@@ -80,7 +86,10 @@ it implies coverage that is not there. Hence two independent guards:
 | --- | --- |
 | `JEEVES_E2E_BINARY` | Path to the zipapp under test (default `dist/jeeves`) |
 | `JEEVES_E2E_REQUIRE` | Fail rather than skip when the zipapp is missing |
+| `JEEVES_E2E_REQUIRE_DOCKER` | Fail rather than skip when no container runtime is usable |
 | `JEEVES_E2E_TIMEOUT` | Per-invocation subprocess timeout in seconds (default 90) |
+| `JEEVES_E2E_BOOT_TIMEOUT` | Seconds to wait for Jenkins to come up (default 180) |
+| `JEEVES_E2E_BUILD_TIMEOUT` | Seconds to allow for the image build (default 900) |
 
 ## Why the tests are written in Gherkin
 
@@ -229,14 +238,115 @@ bits under test are the bits that ship.
 One detail that will otherwise cost an afternoon: artifacts travel as zips and
 **do not preserve the executable bit**, hence the `chmod +x` step.
 
-## Not yet: a real Jenkins in a container
+## The fixture Jenkins
 
-The scenarios here need no server. The next slice of
-[#137](https://github.com/mrsixw/jeeves/issues/137) stands up a real Jenkins in
-Docker — digest-pinned, plugin versions pinned, configured by
-Configuration-as-Code — so the commands that actually talk to Jenkins can be
-exercised against it, including the mutating ones.
+`tests/e2e/docker/` builds it:
 
-When it lands, container scenarios get a `@docker` tag and a
-`JEEVES_E2E_REQUIRE_DOCKER` gate alongside the existing one, and the table at
-the top of this document grows a "yes" in its last column.
+| File | Holds |
+| --- | --- |
+| `Dockerfile` | the digest-pinned base image and the plugin install |
+| `plugins.txt` | every plugin, with its version pinned |
+| `casc.yaml` | the Configuration-as-Code that configures the *instance* |
+| `jobs/*.xml` | the `config.xml` for each seed job, created after boot |
+
+### Pin the plugins, not just the image
+
+The base image is pinned by **digest**, not tag, because a tag can be
+repointed and a digest cannot. That alone is not enough:
+`jenkins-plugin-cli` resolves latest-compatible by default, so the same
+Dockerfile would quietly produce a different Jenkins next month. Silent
+version drift is the class of bug this suite exists to catch, so it must not
+be in the suite itself.
+
+### Instance config versus per-run state
+
+A clean split, so there is one obvious home for each thing:
+
+- **Configuration-as-Code configures the instance** — the local user, the
+  authorisation strategy, the executor count. Baked into the image.
+- **The fixture creates the jobs after boot**, with `POST /createItem` and a
+  checked-in `config.xml`. Jobs are per-run state, not image state, and
+  creating them the way a user would is part of what the suite is for.
+
+Two JCasC traps, both found by booting it rather than by reading docs:
+
+- `authorizationStrategy: globalMatrix` needs the **matrix-auth plugin**. Core's
+  `loggedInUsersCanDoAnything` needs none, and no scenario asserts on
+  finer-grained permissions, so that is what the fixture uses.
+- **`security.csrf` is not a JCasC section.** Setting it fails the boot
+  outright. CSRF is on by default anyway, which is what the suite wants —
+  jeeves fetches a crumb before every POST, and disabling it would silently
+  stop exercising that path.
+
+### The seed jobs
+
+`e2e-freestyle`, `e2e-pipeline`, and `nested` inside `e2e-folder`. The names
+are fixed and spelled literally in the feature files, because interpolating
+them would need placeholder syntax that collides with Gherkin's own `<...>`
+outline parameters. The **fixture inventory** scenario asserts every one of
+those names in a single place, so a rename fails once and legibly instead of
+scattering "job not found" across the file.
+
+Why each exists:
+
+- **Two job types** because freestyle builds report SCM changes under a single
+  `changeSet` while pipeline builds use `changeSets[]`, and
+  `JenkinsClient.changes()` asks for both. Only a real Jenkins of each type
+  shows which one actually arrives.
+- **A folder** because `normalize_jenkins_path` encodes `folder/job` as
+  `/job/folder/job/job`, and a mock will accept whatever shape we invent.
+
+### The credential path
+
+Configuration-as-Code can declare a user with a password but cannot mint an API
+token, and jeeves authenticates with a username and a **token**. So the fixture
+uses the password exactly once, asking Jenkins for a token over the web API the
+way a user would, and every jeeves invocation then uses that token — the path
+the project documents.
+
+One rake: that request needs a crumb **and the session cookie the crumb was
+issued against**. Jenkins binds the crumb to the HTTP session, so fetching a
+crumb and posting without carrying the cookie jar forward fails with "No valid
+crumb". Using a single `requests.Session` for both is what keeps them together.
+
+The fixture talks to Jenkins with `requests` directly rather than through
+`JenkinsClient`, and builds the folder URL by hand rather than with
+`normalize_jenkins_path`. Both are deliberate: those are the things under test,
+and a fixture built on them would let a bug in them hide itself.
+
+### Unreachable is not the same as broken
+
+A container that fails to boot is a real failure and must be loud. A container
+that boots fine but cannot be reached from the host is a property of the
+host's networking, and should skip with that explanation rather than blame the
+image.
+
+The suite tells them apart by asking **from inside the container** whether
+Jenkins is serving. If it answers there but not through the published port, the
+fault is the host's routing: that raises `NotReachable`, which skips locally
+and — under `JEEVES_E2E_REQUIRE_DOCKER`, as CI sets — fails like anything else.
+
+This is not hypothetical. Apple's `container` runtime on macOS 27 builds and
+boots the image happily, and the guest has working outbound networking, but
+host-to-guest traffic does not arrive: the container's IP never answers ARP on
+the bridge. Without the distinction, that host produces a dozen failures and a
+three-minute boot timeout instead of one clear sentence.
+
+### Why `__all__` must not appear in the step modules
+
+`conftest.py` pulls the steps in with `import *`, which **respects `__all__`**.
+An empty one imports nothing, the generated `pytestbdd_stepdef_*` fixtures
+never arrive, and every scenario fails with `StepDefinitionNotFoundError`
+pointing nowhere near the cause. The project's "every module declares
+`__all__`" rule covers `src/jeeves/`, not this package.
+
+### What the container still cannot prove
+
+- **Populated SCM change sets.** The seed jobs have no SCM, so `build blame`
+  is exercised against an *empty* change set for both job types. That proves
+  jeeves reads whichever shape Jenkins sends without erroring, which is the
+  part that differs by job type — but not that it renders real commits. A
+  populated change set needs a git server and an SCM-backed job.
+- **The lockable-resources plugin**, until
+  [#134](https://github.com/mrsixw/jeeves/pull/134) lands and `main` has the
+  `plugin` group.
