@@ -92,10 +92,12 @@ Feature: jeeves CLI contract
     Then the exit code is 0
     And stdout contains "http://config-was-read:8080"
 
-  # The project's hard rule is "stdout for data, stderr for errors". CliRunner
-  # merges the two, so this is the layer that can actually hold us to it — and
-  # the one place a regression would otherwise reach users unnoticed, since a
-  # butler error on stdout would corrupt `--format json` for anything piping us.
+  # The project's hard rule is "stdout for data, stderr for errors". The
+  # mocked suite can check that too, but only for output that goes through
+  # Click; this sees the real file descriptors, so it also catches anything
+  # written around Click — a warning, the shiv preamble, a chatty dependency.
+  # Such a stray line on stdout would corrupt `--format json` for a caller
+  # piping us, and no in-process test would notice.
   Scenario Outline: An unreachable estate is reported on stderr, never stdout
     Given the Jenkins URL points at a closed port
     When I run `jeeves --no-colour <command>`

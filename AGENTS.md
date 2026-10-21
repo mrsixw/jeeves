@@ -84,19 +84,72 @@ This repository provides standardized automated workflows for managing issues. A
 ## Common Commands
 - `make test` — run the mocked suites (`uv run pytest -v`); excludes e2e
 - `make e2e` — build the zipapp, then run the end-to-end suite against it
+- `make e2e-offline` — the e2e scenarios that need no container
 - `make lint` — check linting and formatting
 - `make format` — auto-fix lint and formatting
 - `make build` — build a shiv executable
 
-## Which test layer?
+## Testing expectations
+**Every change to behaviour ships with tests in both layers.** They are doing
+different jobs:
+
+- **Unit tests carry the coverage.** `tests/` is where breadth lives — every
+  branch, every flag permutation, every error path, the output shapes.
+  Fixtures are free and no process is spawned, so this is the cheap place to
+  be exhaustive.
+- **End-to-end scenarios do the validation.** `tests/e2e/features/` proves the
+  thing actually works: the real binary, real exit codes, the real stdout and
+  stderr file descriptors, and a wire format Jenkins genuinely accepts. A new
+  command wants at least one scenario walking its happy path, plus one for any
+  contract a unit test cannot see — an exit code, a stream split, something
+  touching disk, a guard firing before any network call.
+
+Some overlap between the layers is expected and fine; the same behaviour being
+covered in unit and validated end to end is the point, not waste. What does not
+belong end to end is *breadth* — a scenario per flag permutation buys little
+and costs a process spawn, or a container boot, on every run.
+
+Not every scenario needs Jenkins. `tests/e2e/features/cli_contract.feature`
+runs container-free (`make e2e-offline`) and is the right home for anything
+provable without a server — guards that fire before any network call,
+packaging, completions, config handling. Reach for the container only when the
+assertion is about what Jenkins itself accepts or returns.
+
+A pure refactor with no user-visible change may leave the scenarios alone. If
+you add a user-facing behaviour and no scenario, say in the PR description why.
+
+### Which layer am I writing?
 **If it fakes any part of the system under test, it is a unit test** — it
 belongs in `tests/`, not `tests/e2e/`. Faking means `monkeypatch`, but equally
 `requests-mock` or `CliRunner`. `tests/e2e/` drives the built binary as a real
-subprocess, which is the only layer that can see true exit codes, genuinely
-separate stdout and stderr, and the zipapp's own packaging.
+subprocess, which is the only layer that sees true process exit codes, the real
+stdout and stderr file descriptors, and the zipapp's own packaging.
 
-Before adding an e2e scenario, ask what a unit test structurally *cannot* see.
-If the answer is "nothing", it belongs in `tests/test_cli.py`.
+### Install the Jenkins plugins the scenarios need
+Anything beyond base Jenkins — lockable resources, matrix auth, a plugin's
+build step — can only be covered end to end if the plugin is baked into the
+fixture image. Install it; do not drop the layer because the plugin is absent.
+
+1. Add it to the **direct** block at the top of
+   `tests/e2e/docker/plugins.txt`, with its version pinned.
+2. **Regenerate the whole file**: `cd tests/e2e/docker`, build the image, then
+   read the installed versions back out of it with the command in the file's
+   own header, and replace the transitive block with what it prints.
+   `jenkins-plugin-cli` resolves transitive dependencies to
+   latest-compatible, so one new direct plugin moves transitive versions too.
+   The file holds the entire resolved closure, every entry pinned, because
+   silent version drift is the class of bug this suite exists to catch.
+3. Configure the instance in `tests/e2e/docker/casc.yaml` only *after* the
+   plugin is installed. JCasC validates the whole document at boot and rejects
+   a section whose plugin is absent, so Jenkins fails to start rather than
+   warning — `globalMatrix` without `matrix-auth` broke the fixture exactly
+   this way. If a boot fails after a casc edit, read the container logs before
+   anything else.
+4. Add any seed job as `tests/e2e/docker/jobs/*.xml`, wired into the
+   `jenkins_container` fixture so its name is asserted by the fixture
+   inventory scenario.
+5. Expect the first run after a plugin change to rebuild the image, which is
+   the slow part; it is then cached for the session.
 
 Full rationale, the environment traps, and the pytest pin: `docs/design/testing.md`.
 

@@ -70,6 +70,7 @@ testpaths = ["tests"]
 addopts = "-m 'not e2e'"
 markers = [
   "e2e: drives the built binary as a subprocess (see docs/design/testing.md)",
+  "docker: additionally needs a real Jenkins in a container runtime",
 ]
 
 [tool.black]
