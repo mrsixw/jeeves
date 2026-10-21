@@ -26,8 +26,15 @@ subprocess:
 make e2e      # builds, then runs tests/e2e
 ```
 
-CI runs it on every push, and `release` is gated behind it. Which layer a new
-test belongs in — and why that boundary is worth keeping — is set out in
+CI runs it on every push, and `release` is gated behind it.
+
+**Expect to write both layers.** Coverage belongs in the unit tests — every
+branch and flag permutation, where fixtures are free. The end-to-end suite
+does the validation: a change to behaviour wants at least one scenario
+proving the shipped binary really does it. Some overlap between the two is
+expected. If a scenario needs Jenkins surface the fixture lacks, add the
+plugin to `tests/e2e/docker/plugins.txt` rather than skipping the layer.
+Where the boundary falls, and why it is worth keeping, is set out in
 [docs/design/testing.md](docs/design/testing.md). The short version: **if it
 fakes any part of the system under test, it is a unit test.**
 

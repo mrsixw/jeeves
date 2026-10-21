@@ -204,10 +204,21 @@ a fact.
 
 ## When to add a scenario
 
-Ask what a unit test **structurally cannot see**. If the answer is "nothing",
-the test belongs in `tests/test_cli.py`.
+**The default is both layers**, because they are doing different jobs.
 
-Worth a scenario:
+The unit layer carries the **coverage**. It is where breadth belongs: every
+branch, every flag permutation, every error path, the exact output shapes.
+Fixtures are free and nothing is spawned, so being exhaustive there is close
+to free.
+
+This layer does the **validation**. It answers a question the unit layer
+cannot ask at all — does the shipped thing work? So a new command wants at
+least one scenario walking its happy path through the real binary, even where
+`tests/test_cli.py` already covers the same code. That overlap is expected:
+one proves the logic, the other proves the artifact.
+
+Beyond the happy path, a scenario earns its boot when it pins a contract a
+unit test structurally cannot see:
 
 - A new or changed **exit code**, or a new user-facing error path.
 - Anything about **stdout versus stderr**.
@@ -216,12 +227,13 @@ Worth a scenario:
 - **Ordering** properties, such as a guard firing before any network call.
 - A new **output format**, or a change to an existing one's shape.
 
-Not worth one: flag permutations, formatting details, branch coverage. Those
-belong in the unit layer, where fixtures are free and no process is spawned.
+What should *not* migrate up here is breadth. A scenario per flag permutation
+adds a process spawn — often a container boot — to every run and tells us
+little the unit layer has not already said far more cheaply. Exhaustiveness
+below, validation here.
 
-A scenario that merely repeats what `tests/test_cli.py` already proves is worse
-than no scenario — it costs time on every run and implies coverage it does not
-add.
+A pure refactor with no user-visible change may leave the scenarios alone. If
+a user-facing behaviour arrives with none, the PR should say why.
 
 ### One portability trap already found
 
