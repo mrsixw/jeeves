@@ -68,6 +68,17 @@ jobs:
       - name: Verify binary version
         run: utils/check_binary_version.sh
 
+      # Published so the end-to-end job can test these exact bits rather than
+      # rebuilding its own. Same commit, same command — but a rebuild would
+      # not prove the artifact survives the upload/download round trip, and
+      # that round trip is what the release downloads too.
+      - name: Publish binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: jeeves-zipapp
+          path: dist/jeeves
+          if-no-files-found: error
+
   bats:
     runs-on: ubuntu-latest
     steps:
@@ -198,10 +209,62 @@ jobs:
           uv run jeeves completions zsh | grep -q "_JEEVES_COMPLETE"
           uv run jeeves completions fish | grep -q "_JEEVES_COMPLETE"
 
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "latest"
+
+      # Into dist/, which is where JEEVES_E2E_BINARY defaults to looking.
+      - name: Download binary
+        uses: actions/download-artifact@v8
+        with:
+          name: jeeves-zipapp
+          path: dist
+
+      # Artifacts travel as zips, which do not preserve the executable bit.
+      - name: Restore executable bit
+        run: chmod +x dist/jeeves
+
+      # Docker is preinstalled on ubuntu-latest, which is why the suite's
+      # container runtime seam prefers it: the local run then matches CI
+      # rather than diverging from it.
+      - name: Report the container runtime
+        run: docker version --format 'server {{.Server.Version}}'
+
+      # e2e-ci deliberately does not rebuild: it runs the downloaded artifact.
+      # Both REQUIRE flags are set, so a missing binary and an unreachable
+      # container are failures rather than skips, and the test-count check
+      # catches any future skip nobody remembered to gate.
+      - name: Run end-to-end suite
+        run: make e2e-ci
+
+      # The container logs are the only way to diagnose a Jenkins that failed
+      # to boot, and they are gone once the job ends.
+      - name: Jenkins container logs on failure
+        if: failure()
+        run: |
+          for c in $(docker ps -aq --filter "name=jeeves-e2e"); do
+            echo "=== $c ==="
+            docker logs "$c" 2>&1 | tail -100
+          done
+
   release:
     if: "github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version')"
     runs-on: ubuntu-latest
-    needs: [build, man, completions]
+    needs: [build, e2e, man, completions]
     permissions:
       contents: write
     steps:

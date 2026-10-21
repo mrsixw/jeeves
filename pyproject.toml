@@ -25,7 +25,15 @@ jeeves = "jeeves.cli:main"
 [project.optional-dependencies]
 test = [
   "pyfakefs",
-  "pytest",
+  # pytest-bdd's compat shim reaches into pytest privates — on pytest 9.1+ it
+  # calls FixtureManager._register_fixture() and _get_active_fixturedef(), and
+  # imports FixtureDef/FixtureManager/FixtureRequest from _pytest.fixtures.
+  # pytest-bdd 9.0.0 fixed the PytestRemovedIn10Warning those raised, but the
+  # dependency on unguaranteed internals remains, and pytest 10 is not out to
+  # test against. If it breaks, the e2e suite stops *collecting* rather than
+  # merely failing. Revisit when pytest 10 ships. See issue #137.
+  "pytest<10",
+  "pytest-bdd>=9,<10",
   "requests-mock",
 ]
 lint = [
@@ -40,7 +48,8 @@ dev = [
   "black",
   "click-man",
   "pyfakefs",
-  "pytest",
+  "pytest<10",  # see the note in the `test` extra
+  "pytest-bdd>=9,<10",
   "requests-mock",
   "ruff",
   "shiv",
@@ -54,6 +63,15 @@ version = {file = "VERSION"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The end-to-end suite drives the built zipapp as a subprocess, so it needs
+# `make build` first and is far slower than the mocked suites. Excluded by
+# default, which a bare `uv run pytest` inherits; `make e2e` passes `-m e2e`
+# on the command line, which overrides this.
+addopts = "-m 'not e2e'"
+markers = [
+  "e2e: drives the built binary as a subprocess (see docs/design/testing.md)",
+  "docker: additionally needs a real Jenkins in a container runtime",
+]
 
 [tool.black]
 line-length = 88
