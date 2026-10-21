@@ -1,6 +1,18 @@
 .ONESHELL:
 SHELL = /bin/bash
 
+# Pinned to the version the CI spell job uses. Floating it would reintroduce
+# exactly the drift this target exists to remove.
+TYPOS_VERSION := 1.48.0
+# shellcheck-py ships the real shellcheck binary as a wheel, so this is the same
+# tool npx would fetch — but pinned, the way TYPOS_VERSION is, so CI and a
+# laptop run the identical version rather than whatever npm resolves today.
+SHELLCHECK_VERSION := 0.11.0.1
+
+# Every shell source we ship, plus the test helper, which is shell too and just
+# as capable of being wrong.
+SHELL_SOURCES := install.sh $(wildcard utils/*.sh) tests/bats/helpers/common.bash
+
 # Required because of .ONESHELL above, which hands the whole recipe to one
 # shell invocation. Without -e that shell runs on past a failing command and
 # make sees only the LAST command's exit status, so a recipe can fail halfway
@@ -18,7 +30,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 
-.PHONY: build release test e2e e2e-offline e2e-ci lint docs-lint format man completions install uninstall
+.PHONY: build release test bats e2e e2e-offline e2e-ci lint docs-lint shellcheck spell format man completions install uninstall
 
 .venv:
 	uv venv .venv
@@ -67,13 +79,27 @@ e2e-ci: .venv
 		uv run pytest -v -m e2e tests/e2e --junitxml=dist/e2e-results.xml
 	uv run python utils/assert_tests_ran.py dist/e2e-results.xml
 
-lint: .venv docs-lint
+lint: .venv docs-lint shellcheck spell
 	uv sync --extra lint
 	uv run ruff check .
 	uv run black --check .
 
 docs-lint:
 	npx --yes markdownlint-cli2 "docs/**/*.md" "README.md" "CONTRIBUTING.md"
+
+# Static analysis for every shell source.
+shellcheck:
+	uvx --from shellcheck-py==$(SHELLCHECK_VERSION) shellcheck $(SHELL_SOURCES)
+
+# The shell test suite. bats arrives via npx, exactly as
+# markdownlint-cli2 does above — nothing to install by hand.
+bats:
+	npx --yes bats tests/bats
+
+# Spelling, the same check CI runs. uvx fetches typos on demand; uv is already
+# this project's package manager.
+spell:
+	uvx --from typos==$(TYPOS_VERSION) typos
 
 format: .venv
 	uv sync --extra lint

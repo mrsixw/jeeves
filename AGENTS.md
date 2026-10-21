@@ -83,9 +83,13 @@ This repository provides standardized automated workflows for managing issues. A
 
 ## Common Commands
 - `make test` — run the mocked suites (`uv run pytest -v`); excludes e2e
+- `make bats` — run the shell script tests (`npx --yes bats tests/bats`)
 - `make e2e` — build the zipapp, then run the end-to-end suite against it
 - `make e2e-offline` — the e2e scenarios that need no container
-- `make lint` — check linting and formatting
+- `make lint` — check linting and formatting (includes `shellcheck` and `spell`)
+- `make shellcheck` — static analysis for every shell source, the same pinned
+  `shellcheck` version CI runs
+- `make spell` — spell check, the same `typos` version CI runs
 - `make format` — auto-fix lint and formatting
 - `make build` — build a shiv executable
 
@@ -103,6 +107,9 @@ different jobs:
   command wants at least one scenario walking its happy path, plus one for any
   contract a unit test cannot see — an exit code, a stream split, something
   touching disk, a guard firing before any network call.
+
+Shell scripts have their own suite, `tests/bats/`, and the same expectation
+applies: touch a script, cover the change, and run `make bats`.
 
 Some overlap between the layers is expected and fine; the same behaviour being
 covered in unit and validated end to end is the point, not waste. What does not
@@ -124,6 +131,20 @@ belongs in `tests/`, not `tests/e2e/`. Faking means `monkeypatch`, but equally
 `requests-mock` or `CliRunner`. `tests/e2e/` drives the built binary as a real
 subprocess, which is the only layer that sees true process exit codes, the real
 stdout and stderr file descriptors, and the zipapp's own packaging.
+
+### Testing the shell scripts
+- `tests/bats/` covers `install.sh` and everything in `utils/`. Each test runs
+  the real script as a subprocess with `gh`, `git`, `curl`, `tar`, `install`
+  and `python3` stubbed on `PATH`, and `HOME` redirected into a temporary
+  directory. Offline, and safe to run anywhere.
+- Those stubs are faking, by the rule above, which is why this suite lives
+  under `tests/` and not `tests/e2e/`.
+- The helper reads the binary name from `[project.scripts]` in
+  `pyproject.toml`; nothing hardcodes it.
+- Stubs record their arguments: assert *what the script asked for*, not only
+  what it printed. `assert_called_arg` matches a whole argument, so a quoting
+  bug cannot hide behind a flattened command line.
+- Run `make bats` whenever you touch a shell script.
 
 ### Install the Jenkins plugins the scenarios need
 Anything beyond base Jenkins — lockable resources, matrix auth, a plugin's
