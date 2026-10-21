@@ -15,11 +15,13 @@
   - `updater.py` — GitHub release update checker
   - `logger.py` — File logging setup
   - `xdg.py` — XDG base directory support
-- `tests/` — pytest suite mirroring src modules
+- `tests/` — pytest suite mirroring src modules (mocked; never hits the network)
+- `tests/e2e/` — behaviour-driven end-to-end suite: Gherkin scenarios driving
+  the built zipapp as a subprocess. See `docs/design/testing.md`
 - `pyproject.toml` — project metadata, dependencies, tool config
 - `VERSION` — static file containing the current version string
 - `Makefile` — build, test, lint, format targets
-- `utils/` — helper scripts for release management
+- `utils/` — helper scripts for release management and CI guards
 
 ## Jenkins API Notes
 - Jenkins HTTP API: append `/api/json` to any URL for JSON data; auth via HTTP Basic (username + API token)
@@ -80,10 +82,23 @@ This repository provides standardized automated workflows for managing issues. A
 - Package manager: **uv** (not pip). Use `uv sync`, `uv run`, etc.
 
 ## Common Commands
-- `make test` — run tests (`uv run pytest -v`)
+- `make test` — run the mocked suites (`uv run pytest -v`); excludes e2e
+- `make e2e` — build the zipapp, then run the end-to-end suite against it
 - `make lint` — check linting and formatting
 - `make format` — auto-fix lint and formatting
 - `make build` — build a shiv executable
+
+## Which test layer?
+**If it fakes any part of the system under test, it is a unit test** — it
+belongs in `tests/`, not `tests/e2e/`. Faking means `monkeypatch`, but equally
+`requests-mock` or `CliRunner`. `tests/e2e/` drives the built binary as a real
+subprocess, which is the only layer that can see true exit codes, genuinely
+separate stdout and stderr, and the zipapp's own packaging.
+
+Before adding an e2e scenario, ask what a unit test structurally *cannot* see.
+If the answer is "nothing", it belongs in `tests/test_cli.py`.
+
+Full rationale, the environment traps, and the pytest pin: `docs/design/testing.md`.
 
 ## Module API contract
 - A leading `_` means "internal to this module". Anything a sibling module

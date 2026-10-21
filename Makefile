@@ -1,11 +1,24 @@
 .ONESHELL:
 SHELL = /bin/bash
 
+# Required because of .ONESHELL above, which hands the whole recipe to one
+# shell invocation. Without -e that shell runs on past a failing command and
+# make sees only the LAST command's exit status, so a recipe can fail halfway
+# and still report success — `make lint` would pass with a failing `ruff` so
+# long as the `black` after it succeeded.
+#
+# It does not reproduce on macOS, which is the trap: Apple ships GNU Make
+# 3.81, which predates both .ONESHELL and .SHELLFLAGS (3.82) and ignores them,
+# running each line in its own shell and checking each status. So the bug is
+# invisible locally and live in CI. On 3.81 this line is inert; on 3.82+ it
+# restores stop-on-first-failure. See issue #139.
+.SHELLFLAGS := -ec
+
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 
-.PHONY: build release test lint docs-lint format man completions install uninstall
+.PHONY: build release test e2e e2e-ci lint docs-lint format man completions install uninstall
 
 .venv:
 	uv venv .venv
@@ -28,6 +41,25 @@ release: build
 test: .venv
 	uv sync --extra test
 	uv run pytest -v
+
+# End-to-end: drives the built zipapp as a subprocess. Builds first so the
+# binary under test is always current. `-m e2e` on the command line overrides
+# the `-m 'not e2e'` in pyproject.toml.
+e2e: build
+	uv sync --extra test
+	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e
+
+# CI variant: deliberately does NOT depend on build, so it runs against the
+# artifact the build job produced — the same bits the release ships. The
+# REQUIRE flag turns "no binary" into a failure rather than a skip, so the
+# suite cannot quietly rot to green. The test count check is the second half
+# of that guarantee: a collection error would otherwise also report success.
+e2e-ci: .venv
+	uv sync --extra test
+	mkdir -p dist
+	JEEVES_E2E_REQUIRE=1 uv run pytest -v -m e2e tests/e2e \
+		--junitxml=dist/e2e-results.xml
+	uv run python utils/assert_tests_ran.py dist/e2e-results.xml
 
 lint: .venv docs-lint
 	uv sync --extra lint
