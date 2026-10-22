@@ -271,8 +271,8 @@ repointed and a digest cannot.
 
 Naming three plugins with versions is still not reproducibility.
 `jenkins-plugin-cli` resolves **transitive dependencies** to
-latest-compatible, and those three pull in ~54 more at whatever versions are
-current that day. So `plugins.txt` holds the **entire resolved set**, 57
+latest-compatible, and the direct asks pull in ~54 more at whatever versions
+are current that day. So `plugins.txt` holds the **entire resolved set**, 58
 entries, every one pinned — the direct asks at the top, the transitive closure
 below.
 
@@ -302,7 +302,8 @@ Two JCasC traps, both found by booting it rather than by reading docs:
 
 ### The seed jobs
 
-`e2e-freestyle`, `e2e-pipeline`, and `nested` inside `e2e-folder`. The names
+`e2e-freestyle`, `e2e-pipeline`, `e2e-lock-holder`, and `nested` inside
+`e2e-folder`. The names
 are fixed and spelled literally in the feature files, because interpolating
 them would need placeholder syntax that collides with Gherkin's own `<...>`
 outline parameters. The **fixture inventory** scenario asserts every one of
@@ -317,6 +318,33 @@ Why each exists:
   shows which one actually arrives.
 - **A folder** because `normalize_jenkins_path` encodes `folder/job` as
   `/job/folder/job/job`, and a mock will accept whatever shape we invent.
+- **A lock holder** because `locked` is not reachable any other way.
+  Reserving a resource makes it `reserved`; only a build inside the
+  lockable-resources `lock` step makes it `locked`, and only then do
+  `lockCause` and `buildName` carry anything. Verified against the fixture:
+  while held, the plugin reports `locked=true`, `reserved=false`,
+  `reservedBy=null` and `buildName` set — so a locked resource has no holder,
+  and the record's derived `state` has to prefer `locked` over `reserved`.
+  The scenario polls for the lock rather than sleeping a guessed interval,
+  because the queue has to assign an executor first and that is not instant
+  on a loaded runner.
+
+### The lockable resources
+
+Declared in `casc.yaml`, not created by the fixture, because the plugin keeps
+them in global configuration — they are image state in exactly the way the
+jobs are not.
+
+`e2e-lock-free` and `e2e-lock-spare` share the label `e2e-pool`, and only the
+first also carries `linux`. Two resources rather than one is deliberate: a
+`--label` filter that ORs instead of ANDs passes against a single labelled
+resource. `e2e-lock-held` is separate so the lock-holding build cannot
+interfere with the reservation scenarios.
+
+Labels arrive from the plugin as **one space-separated string**, with
+`labelsAsList` alongside it. jeeves prefers the list and falls back to
+splitting the string; only the real plugin confirms which format is being
+split.
 
 ### The credential path
 
@@ -376,6 +404,16 @@ pointing nowhere near the cause. The project's "every module declares
   jeeves reads whichever shape Jenkins sends without erroring, which is the
   part that differs by job type — but not that it renders real commits. A
   populated change set needs a git server and an SCM-backed job.
-- **The lockable-resources plugin**, until
-  [#134](https://github.com/mrsixw/jeeves/pull/134) lands and `main` has the
-  `plugin` group.
+- **A Jenkins without the lockable-resources plugin.** `jeeves plugin
+  lockable-resources` degrades politely when the plugin is absent, and the
+  fixture has it installed, so that branch is proved only in
+  `tests/test_lockable.py`. Proving it here would need a second container
+  without the plugin — a whole second boot to assert one error message, which
+  is not worth it.
+- **An older lockable-resources plugin.** `createResource` and
+  `deleteResource` are `@Restricted(NoExternalUse)` and absent from older
+  releases, which is why jeeves tells "plugin too old" apart from "no such
+  resource". The fixture pins a current version, so the scenarios prove those
+  endpoints *do* exist — the useful half. The too-old branch stays a unit
+  test, since asserting it would mean pinning a second, deliberately stale
+  image.

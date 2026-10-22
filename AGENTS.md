@@ -38,6 +38,36 @@
 - `GET /crumbIssuer/api/json` — CSRF crumb; fetch before first POST, silently skip if unavailable
 - Nested jobs: encode `folder/job` as `job/folder/job/job` in URL paths (use `normalize_jenkins_path`)
 
+### Lockable Resources plugin
+Not base Jenkins — the `lockable-resources` plugin, handled in `src/jeeves/lockable.py`.
+Everything hangs off the `/lockable-resources/` root action. Every mutator is `@RequirePOST`,
+takes a **single** resource (the parameter is `resource`, no list support), and answers by
+forwarding to the previous page — so the status code is the only meaningful part of the reply.
+- `GET /lockable-resources/api/json` — the whole register (`resources[]`)
+- `POST /lockable-resources/reserve` — form `resource`, optional `reason`; perm RESERVE
+- `POST /lockable-resources/unreserve` — form `resource`; perm RESERVE, and the caller must hold it or be an administrator
+- `POST /lockable-resources/unlock`, `/reset` — form `resource`; perm UNLOCK
+- `POST /lockable-resources/createResource` — form `name`, `description`, `labels` (space-separated); perm CONFIGURE; 409 if it exists
+- `POST /lockable-resources/deleteResource` — form `resource`; perm CONFIGURE; 423 if the resource is not free
+- **A 404 is ambiguous on every mutator.** With the plugin absent there is no
+  `/lockable-resources/reserve` either, so Jenkins answers exactly as it does for a resource that
+  is not on the register. Probe `GET /lockable-resources/api/json` to settle it: a 404 there means
+  the plugin is missing; otherwise a 404 from `reserve`/`unreserve`/`unlock`/`reset` means the
+  resource is unknown, while a 404 from `createResource`/`deleteResource` means the plugin is too
+  old — those two are `@Restricted(NoExternalUse.class)` upstream and absent from older releases.
+- `unreserve`, `unlock` and `reset` **read the resource before posting**, because the plugin
+  answers **200 whether or not there was anything to do** — so a blind POST would have us claim
+  work we did not perform. Reading first also means an absent resource is reported as unknown
+  rather than as one already in good order.
+- Test `reservedBy`, not `free`, when deciding whether there is a reservation to release: a
+  resource locked by a build is not free yet carries no reservation.
+- A **403** from `unreserve` is kept as a race guard only — the reservation being dropped between
+  our read and our POST. Earlier notes here claimed the plugin 403s when nobody holds the
+  resource; it does not, on 1576.v217259b_f9976. The end-to-end suite caught jeeves reporting a
+  release it had not performed, which is the kind of wire assumption only a real plugin settles.
+- Out of scope: `/lockable-resources/remote/v1/`, a heartbeat-driven lock-holding REST protocol
+  for long-lived external clients.
+
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
 - **Every** Jeeves-voiced message — success, info, empty state, and error — leads with a single emoji followed by **one** space (never a double space).

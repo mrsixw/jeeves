@@ -2676,3 +2676,416 @@ def test_no_colour_config_key_reaches_the_profile_error(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "ghost" in result.output
     assert "\033[" not in result.output
+
+
+# ── lockable resources ────────────────────────────────────────────────────────
+
+_LOCKABLE = "lockable-resources"
+
+
+def _lockable_resource(name="r1", **overrides):
+    item = {
+        "name": name,
+        "description": "",
+        "labels": "",
+        "labelsAsList": [],
+        "free": True,
+        "reserved": False,
+        "locked": False,
+        "reservedBy": None,
+    }
+    item.update(overrides)
+    return item
+
+
+def _lockable_http(jenkins, resources):
+    jenkins.get(api(_LOCKABLE), json={"resources": resources})
+
+
+def _lockable_post_http(jenkins, endpoint, status_code=200):
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(url(f"{_LOCKABLE}/{endpoint}"), status_code=status_code)
+
+
+def _lockable_invoke(*args, **kwargs):
+    return _invoke(
+        "--no-colour", "--no-update-check", "plugin", _LOCKABLE, *args, **kwargs
+    )
+
+
+def test_plugin_group_listed_in_help():
+    result = _invoke("--help")
+    assert result.exit_code == 0
+    assert "plugin" in _listed_commands(result.output)
+
+
+def test_lockable_group_lists_every_verb():
+    result = _invoke("plugin", _LOCKABLE, "--help")
+    assert result.exit_code == 0
+    assert _listed_commands(result.output) == {
+        "list",
+        "show",
+        "add",
+        "remove",
+        "reserve",
+        "unreserve",
+        "unlock",
+        "reset",
+    }
+
+
+def test_lockable_list_table(jenkins):
+    _lockable_http(
+        jenkins,
+        [
+            _lockable_resource("staging-db", free=False, reservedBy="bertie"),
+            _lockable_resource("rig-01"),
+        ],
+    )
+    result = _lockable_invoke("list")
+    assert result.exit_code == 0
+    assert "staging-db" in result.stdout
+    assert "bertie" in result.stdout
+    assert "lock and key" in result.stderr
+    assert "lock and key" not in result.stdout
+
+
+def test_lockable_list_json_record_keys(jenkins):
+    _lockable_http(jenkins, [_lockable_resource()])
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "plugin",
+        _LOCKABLE,
+        "list",
+    )
+    assert result.exit_code == 0
+    record = _json.loads(result.stdout)[0]
+    assert set(record) == {
+        "name",
+        "description",
+        "note",
+        "labels",
+        "state",
+        "reserved_by",
+        "reserved_by_email",
+        "reserved_at",
+        "lock_reason",
+        "lock_cause",
+        "build_name",
+        "ephemeral",
+        "stolen",
+        "url",
+    }
+
+
+def test_lockable_list_empty_state_on_stderr(jenkins):
+    _lockable_http(jenkins, [])
+    result = _lockable_invoke("list")
+    assert result.exit_code == 0
+    assert "key cupboard" in result.stderr
+    assert "key cupboard" not in result.stdout
+
+
+def test_lockable_list_filters_by_label(jenkins):
+    _lockable_http(
+        jenkins,
+        [
+            _lockable_resource("db", labelsAsList=["database", "prod"]),
+            _lockable_resource("rig", labelsAsList=["hardware"]),
+        ],
+    )
+    result = _lockable_invoke("list", "--label", "database")
+    assert result.exit_code == 0
+    assert "db" in result.stdout
+    assert "rig" not in result.stdout
+
+
+def test_lockable_list_requires_every_label_given(jenkins):
+    _lockable_http(
+        jenkins,
+        [
+            _lockable_resource("both", labelsAsList=["database", "prod"]),
+            _lockable_resource("one", labelsAsList=["database"]),
+        ],
+    )
+    result = _lockable_invoke("list", "--label", "database", "--label", "prod")
+    assert result.exit_code == 0
+    assert "both" in result.stdout
+    assert "one" not in result.stdout
+
+
+def test_lockable_list_filters_by_state(jenkins):
+    _lockable_http(
+        jenkins,
+        [
+            _lockable_resource("held", free=False, reservedBy="bertie"),
+            _lockable_resource("spare"),
+        ],
+    )
+    result = _lockable_invoke("list", "--state", "reserved")
+    assert result.exit_code == 0
+    assert "held" in result.stdout
+    assert "spare" not in result.stdout
+
+
+def test_lockable_list_rejects_an_unknown_state(jenkins):
+    result = _lockable_invoke("list", "--state", "sideways")
+    assert result.exit_code != 0
+
+
+def test_lockable_show_single_resource(jenkins):
+    _lockable_http(
+        jenkins,
+        [
+            _lockable_resource("rig-01", description="the test rig", note="fragile"),
+            _lockable_resource("other"),
+        ],
+    )
+    result = _lockable_invoke("show", "rig-01")
+    assert result.exit_code == 0
+    assert "the test rig" in result.stdout
+    assert "fragile" in result.stdout
+    assert "other" not in result.stdout
+
+
+def test_lockable_show_unknown_resource_errors(jenkins):
+    _lockable_http(jenkins, [_lockable_resource("other")])
+    result = _lockable_invoke("show", "rig-01")
+    assert result.exit_code == 1
+    assert "no resource by the name 'rig-01'" in result.stderr
+
+
+def test_lockable_reserve_posts_resource_and_reason(jenkins):
+    _lockable_post_http(jenkins, "reserve")
+    result = _lockable_invoke("reserve", "rig-01", "--reason", "debugging")
+    assert result.exit_code == 0
+    assert "'rig-01' is reserved in your name" in result.stdout
+    post = _last_post(jenkins)
+    assert post.url.endswith("/lockable-resources/reserve")
+    assert parse_qs(post.text) == {"resource": ["rig-01"], "reason": ["debugging"]}
+
+
+def test_lockable_reserve_busy_names_the_holder(jenkins):
+    _lockable_post_http(jenkins, "reserve", status_code=423)
+    _lockable_http(
+        jenkins, [_lockable_resource("rig-01", free=False, reservedBy="bertie")]
+    )
+    jenkins.get(api("me"), json={"id": "alice", "fullName": "Alice"})
+    result = _lockable_invoke("reserve", "rig-01")
+    assert result.exit_code == 1
+    assert "in the hands of bertie" in result.stderr
+
+
+def test_lockable_reserve_already_ours_exits_zero(jenkins):
+    _lockable_post_http(jenkins, "reserve", status_code=423)
+    _lockable_http(
+        jenkins, [_lockable_resource("rig-01", free=False, reservedBy="alice")]
+    )
+    jenkins.get(api("me"), json={"id": "alice", "fullName": "Alice"})
+    result = _lockable_invoke("reserve", "rig-01")
+    assert result.exit_code == 0
+    assert "already reserved in your name" in result.stdout
+
+
+def test_lockable_unreserve_posts_resource(jenkins):
+    # Somebody holds it, so there is a reservation to release. unreserve reads
+    # before it posts, because the plugin answers 200 either way.
+    _lockable_post_http(jenkins, "unreserve")
+    _lockable_http(
+        jenkins, [_lockable_resource("rig-01", free=False, reservedBy="jeeves")]
+    )
+    result = _lockable_invoke("unreserve", "rig-01")
+    assert result.exit_code == 0
+    assert "released back to the household" in result.stdout
+    assert parse_qs(_last_post(jenkins).text) == {"resource": ["rig-01"]}
+
+
+def test_lockable_unreserve_of_a_free_resource_exits_zero(jenkins):
+    """Nothing to release, so say so rather than claim a release."""
+    _lockable_post_http(jenkins, "unreserve")
+    _lockable_http(jenkins, [_lockable_resource("rig-01")])
+    result = _lockable_invoke("unreserve", "rig-01")
+    assert result.exit_code == 0
+    assert "already at liberty" in result.stdout
+
+
+def test_lockable_unreserve_forbidden_mentions_the_holder_rule(jenkins):
+    _lockable_post_http(jenkins, "unreserve", status_code=403)
+    _lockable_http(
+        jenkins, [_lockable_resource("rig-01", free=False, reservedBy="bertie")]
+    )
+    result = _lockable_invoke("unreserve", "rig-01")
+    assert result.exit_code == 1
+    assert "Only the holder" in result.stderr
+
+
+def test_lockable_unreserve_of_a_locked_resource_exits_zero(jenkins):
+    """Locked by a build, reserved by nobody: there is nothing to release."""
+    _lockable_post_http(jenkins, "unreserve", status_code=403)
+    _lockable_http(jenkins, [_lockable_resource("rig-01", free=False, locked=True)])
+    result = _lockable_invoke("unreserve", "rig-01")
+    assert result.exit_code == 0
+    assert "already at liberty" in result.stdout
+
+
+def test_lockable_unlock_posts_resource(jenkins):
+    _lockable_post_http(jenkins, "unlock")
+    _lockable_http(jenkins, [_lockable_resource("rig-01", free=False, locked=True)])
+    result = _lockable_invoke("unlock", "rig-01")
+    assert result.exit_code == 0
+    assert "I've unlocked 'rig-01'" in result.stdout
+    assert parse_qs(_last_post(jenkins).text) == {"resource": ["rig-01"]}
+
+
+def test_lockable_unlock_of_an_unlocked_resource_exits_zero(jenkins):
+    _lockable_post_http(jenkins, "unlock")
+    _lockable_http(jenkins, [_lockable_resource("rig-01")])
+    result = _lockable_invoke("unlock", "rig-01")
+    assert result.exit_code == 0
+    assert "already at liberty" in result.stdout
+    assert not [r for r in jenkins.request_history if r.method == "POST"]
+
+
+def test_lockable_reset_posts_resource(jenkins):
+    _lockable_post_http(jenkins, "reset")
+    _lockable_http(jenkins, [_lockable_resource("rig-01", free=False, locked=True)])
+    result = _lockable_invoke("reset", "rig-01")
+    assert result.exit_code == 0
+    assert "restored to good order" in result.stdout
+    assert parse_qs(_last_post(jenkins).text) == {"resource": ["rig-01"]}
+
+
+def test_lockable_reset_of_a_free_resource_exits_zero(jenkins):
+    _lockable_post_http(jenkins, "reset")
+    _lockable_http(jenkins, [_lockable_resource("rig-01")])
+    result = _lockable_invoke("reset", "rig-01")
+    assert result.exit_code == 0
+    assert "already in good order" in result.stdout
+    assert not [r for r in jenkins.request_history if r.method == "POST"]
+
+
+def test_lockable_add_posts_name_description_and_labels(jenkins):
+    _lockable_post_http(jenkins, "createResource")
+    result = _lockable_invoke(
+        "add",
+        "rig-01",
+        "--description",
+        "the test rig",
+        "--label",
+        "hw",
+        "--label",
+        "x",
+    )
+    assert result.exit_code == 0
+    assert "entered 'rig-01' in the register" in result.stdout
+    assert parse_qs(_last_post(jenkins).text) == {
+        "name": ["rig-01"],
+        "description": ["the test rig"],
+        "labels": ["hw x"],
+    }
+
+
+def test_lockable_add_existing_exits_zero(jenkins):
+    _lockable_post_http(jenkins, "createResource", status_code=409)
+    result = _lockable_invoke("add", "rig-01")
+    assert result.exit_code == 0
+    assert "already in the register" in result.stdout
+
+
+def test_lockable_remove_with_yes_skips_the_prompt(jenkins):
+    _lockable_post_http(jenkins, "deleteResource")
+    result = _lockable_invoke("remove", "rig-01", "--yes")
+    assert result.exit_code == 0
+    assert "struck from the register" in result.stdout
+    assert parse_qs(_last_post(jenkins).text) == {"resource": ["rig-01"]}
+
+
+def test_lockable_remove_without_a_tty_does_not_prompt(jenkins):
+    """A piped invocation must not block waiting for an answer."""
+    _lockable_post_http(jenkins, "deleteResource")
+    result = _lockable_invoke("remove", "rig-01")
+    assert result.exit_code == 0
+    assert "struck from the register" in result.stdout
+
+
+def test_lockable_remove_prompts_on_a_tty(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod, "_isatty", lambda: True)
+    _lockable_post_http(jenkins, "deleteResource")
+    result = _lockable_invoke("remove", "rig-01", input="y\n")
+    assert result.exit_code == 0
+    assert "🛎️ Strike 'rig-01' from the register, sir?" in result.output
+    assert "struck from the register" in result.stdout
+
+
+def test_lockable_remove_aborts_when_declined(jenkins, monkeypatch):
+    monkeypatch.setattr(cli_mod, "_isatty", lambda: True)
+    _lockable_post_http(jenkins, "deleteResource")
+    result = _lockable_invoke("remove", "rig-01", input="n\n")
+    assert result.exit_code == 0
+    assert "left the register as it was" in result.stderr
+    assert not [r for r in jenkins.request_history if r.method == "POST"]
+
+
+def test_lockable_remove_unknown_resource_exits_zero(jenkins):
+    _lockable_post_http(jenkins, "deleteResource", status_code=404)
+    _lockable_http(jenkins, [_lockable_resource("other")])
+    result = _lockable_invoke("remove", "rig-01", "--yes")
+    assert result.exit_code == 0
+    assert "was never on the register" in result.stdout
+
+
+def test_lockable_remove_engaged_resource_errors(jenkins):
+    _lockable_post_http(jenkins, "deleteResource", status_code=423)
+    result = _lockable_invoke("remove", "rig-01", "--yes")
+    assert result.exit_code == 1
+    assert "still in use" in result.stderr
+
+
+def test_lockable_without_the_plugin_errors(jenkins):
+    jenkins.get(api(_LOCKABLE), status_code=404)
+    result = _lockable_invoke("list")
+    assert result.exit_code == 1
+    assert "does not appear to be installed" in result.stderr
+
+
+def test_lockable_mutator_without_the_plugin_errors(jenkins):
+    """A 404 on the mutator is the plugin's absence, not a missing resource."""
+    _lockable_post_http(jenkins, "reserve", status_code=404)
+    jenkins.get(api(_LOCKABLE), status_code=404)
+    result = _lockable_invoke("reserve", "rig-01")
+    assert result.exit_code == 1
+    assert "does not appear to be installed" in result.stderr
+
+
+def test_lockable_reserve_unknown_resource_errors(jenkins):
+    _lockable_post_http(jenkins, "reserve", status_code=404)
+    _lockable_http(jenkins, [])
+    result = _lockable_invoke("reserve", "rig-01")
+    assert result.exit_code == 1
+    assert "no resource by the name 'rig-01'" in result.stderr
+
+
+def test_lockable_add_on_an_old_plugin_errors(jenkins):
+    _lockable_post_http(jenkins, "createResource", status_code=404)
+    _lockable_http(jenkins, [])
+    result = _lockable_invoke("add", "rig-01")
+    assert result.exit_code == 1
+    assert "vintage too old" in result.stderr
+    assert "'add'" in result.stderr
+
+
+def test_lockable_unexpected_status_gets_the_generic_butler_error(jenkins):
+    _lockable_post_http(jenkins, "reserve", status_code=500)
+    result = _lockable_invoke("reserve", "rig-01")
+    assert result.exit_code == 1
+    assert "considerable state of disarray" in result.stderr
+
+
+def test_butler_error_401(jenkins):
+    jenkins.get(api(_LOCKABLE), status_code=401)
+    result = _lockable_invoke("list")
+    assert result.exit_code == 1
+    assert "A 401" in result.stderr

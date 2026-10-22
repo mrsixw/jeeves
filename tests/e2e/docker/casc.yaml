@@ -69,3 +69,33 @@ unclassified:
   # the container's address is not known until it is running.
   location:
     adminAddress: "jeeves-e2e@example.invalid"
+
+  # Lockable resources, declared here because they are instance config in
+  # exactly the way the seed jobs are not: the plugin stores them in global
+  # configuration, so a resource declared at boot is part of the image's shape
+  # rather than per-run state.
+  #
+  # This section is only valid because lockable-resources is in plugins.txt.
+  # JCasC validates the whole document at boot and rejects a section whose
+  # plugin is absent, so adding one before its plugin fails the boot outright
+  # rather than warning. See AGENTS.md.
+  #
+  # Labels are a space-separated string, which is the plugin's own wire
+  # format — `jeeves plugin lockable-resources list --label` has to split it,
+  # and that split is one of the things only the real plugin can confirm.
+  lockableResourcesManager:
+    declaredResources:
+      # Two in the same pool, one of which also carries `linux`, so a
+      # --label filter requiring both can be told apart from one requiring
+      # either. With a single labelled resource an AND bug would pass.
+      - name: "e2e-lock-free"
+        description: "Reserve and release me."
+        labels: "e2e-pool linux"
+      - name: "e2e-lock-spare"
+        description: "The second member of the pool."
+        labels: "e2e-pool"
+      # Held by the e2e-lock-holder pipeline, so the `locked` state — which no
+      # amount of reserving can produce — has somewhere to happen.
+      - name: "e2e-lock-held"
+        description: "Locked by a running build, not by a reservation."
+        labels: "e2e-held"

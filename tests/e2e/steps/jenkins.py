@@ -13,7 +13,9 @@ obvious failure rather than a dozen confusing ones.
 """
 
 import json
+import time
 
+import pytest
 import requests
 from pytest_bdd import given, parsers, then
 
@@ -100,3 +102,126 @@ def _payload_keys(payload, key):
     assert (
         not missing
     ), f"{len(missing)} record(s) lack {key!r}: {json.dumps(missing[:2])}"
+
+
+def _resources(jenkins_container):
+    """The plugin's own roster, read directly rather than through jeeves."""
+    resp = requests.get(
+        f"{jenkins_container.base_url}/lockable-resources/api/json",
+        auth=(jenkins_container.user, jenkins_container.token),
+        timeout=15,
+    )
+    assert (
+        resp.status_code == 200
+    ), f"the plugin's roster said {resp.status_code}: {resp.text[:200]}"
+    return {r["name"]: r for r in resp.json().get("resources", [])}
+
+
+@then("the lockable fixture inventory is as documented")
+def _lockable_inventory(jenkins_container):
+    """Guard the resource names the lockable feature file spells literally.
+
+    Same reasoning as ``the fixture inventory is as documented``: a rename
+    fails here, once, instead of as a scatter of "no resource by that name"
+    errors across the file.
+
+    Unlike the job inventory, this asks **Jenkins** rather than comparing the
+    fixture's own attributes to literals. The jobs are created by the fixture,
+    so its attributes are the source of truth for them; the resources are
+    declared in casc.yaml, so the fixture's names are a second copy. Checking
+    the copy against itself would pass happily while casc.yaml drifted — which
+    is the one failure this scenario exists to catch.
+    """
+    assert jenkins_container.lock_holder_job == "e2e-lock-holder"
+
+    found = _resources(jenkins_container)
+    expected = {
+        "e2e-lock-free": {"e2e-pool", "linux"},
+        "e2e-lock-spare": {"e2e-pool"},
+        "e2e-lock-held": {"e2e-held"},
+    }
+    assert set(expected) <= set(found), (
+        f"casc.yaml declares {sorted(found)}, but the feature file expects "
+        f"{sorted(expected)}"
+    )
+    for name, labels in expected.items():
+        actual = set(found[name].get("labelsAsList") or [])
+        assert actual == labels, (
+            f"{name!r} carries labels {sorted(actual)}, "
+            f"the scenarios expect {sorted(labels)}"
+        )
+
+    # The fixture's own copies, so a scenario reading them agrees with Jenkins.
+    assert jenkins_container.free_resource == "e2e-lock-free"
+    assert jenkins_container.spare_resource == "e2e-lock-spare"
+    assert jenkins_container.held_resource == "e2e-lock-held"
+    assert jenkins_container.pool_label == "e2e-pool"
+
+
+@then(parsers.parse('Jenkins reports the resource "{name}" as reserved by "{who}"'))
+def _reserved_by(jenkins_container, name, who):
+    """Confirm a reservation against the plugin, not against jeeves.
+
+    Reading a mutation back with the tool that made it proves only that the
+    tool is self-consistent.
+    """
+    found = _resources(jenkins_container)
+    assert name in found, f"no resource named {name!r}; saw {sorted(found)}"
+    assert found[name].get("reservedBy") == who, (
+        f"expected {name!r} reserved by {who!r}, "
+        f"the plugin says {found[name].get('reservedBy')!r}"
+    )
+
+
+@then(parsers.parse('Jenkins reports the resource "{name}" as free'))
+def _resource_free(jenkins_container, name):
+    found = _resources(jenkins_container)
+    assert name in found, f"no resource named {name!r}; saw {sorted(found)}"
+    r = found[name]
+    assert r.get("free") and not r.get("reservedBy"), (
+        f"expected {name!r} to be free, the plugin says "
+        f"free={r.get('free')!r} reservedBy={r.get('reservedBy')!r}"
+    )
+
+
+@then(parsers.parse('Jenkins has no resource named "{name}"'))
+def _resource_absent(jenkins_container, name):
+    found = _resources(jenkins_container)
+    assert name not in found, f"{name!r} is still on the register: {found.get(name)}"
+
+
+@then(parsers.parse('Jenkins has a resource named "{name}"'))
+def _resource_present(jenkins_container, name):
+    found = _resources(jenkins_container)
+    assert name in found, f"{name!r} is not on the register; saw {sorted(found)}"
+
+
+@given(parsers.parse('a build is holding the resource "{name}"'))
+def _build_holds(jenkins_container, name):
+    """Trigger the holder pipeline and wait until the lock is actually taken.
+
+    Polls the plugin rather than sleeping a guessed interval: the queue has to
+    assign an executor first, and on a loaded CI runner that is not instant.
+    The hold is long enough that the assertions after this step run inside it,
+    and the build releases the lock on its own, so nothing needs tearing down.
+    """
+    resp = requests.post(
+        f"{jenkins_container.base_url}"
+        f"/job/{jenkins_container.lock_holder_job}/buildWithParameters",
+        # A form body, not a query string — the shape Jenkins actually wants.
+        data={"HOLD_SECONDS": "45"},
+        auth=(jenkins_container.user, jenkins_container.token),
+        timeout=30,
+    )
+    assert resp.status_code in (200, 201), f"trigger said {resp.status_code}"
+
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        found = _resources(jenkins_container)
+        if found.get(name, {}).get("locked"):
+            return
+        time.sleep(1)
+    pytest.fail(
+        f"{name!r} was never locked within 120s. The holder build may have "
+        f"failed; the plugin reports {_resources(jenkins_container).get(name)}"
+    )
