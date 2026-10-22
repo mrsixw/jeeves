@@ -86,11 +86,22 @@ uv sync --extra dev
 make format && make lint && make test
 ```
 
+`make test` runs the mocked suites. The end-to-end suite builds the zipapp and
+drives it as a real subprocess, so it is a separate target:
+
+```bash
+make e2e
+```
+
+See [Testing strategy](docs/design/testing.md) for which layer a new test
+belongs in.
+
 ## Documentation
 
 - [Options reference](docs/manual/options.md)
 - [Usage guide](docs/manual/usage.md)
 - [Troubleshooting](docs/manual/troubleshooting.md)
+- [Testing strategy](docs/design/testing.md)
 - [Contributing](CONTRIBUTING.md)
 
 ---

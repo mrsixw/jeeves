@@ -15,11 +15,13 @@
   - `updater.py` — GitHub release update checker
   - `logger.py` — File logging setup
   - `xdg.py` — XDG base directory support
-- `tests/` — pytest suite mirroring src modules
+- `tests/` — pytest suite mirroring src modules (mocked; never hits the network)
+- `tests/e2e/` — behaviour-driven end-to-end suite: Gherkin scenarios driving
+  the built zipapp as a subprocess. See `docs/design/testing.md`
 - `pyproject.toml` — project metadata, dependencies, tool config
 - `VERSION` — static file containing the current version string
 - `Makefile` — build, test, lint, format targets
-- `utils/` — helper scripts for release management
+- `utils/` — helper scripts for release management and CI guards
 
 ## Jenkins API Notes
 - Jenkins HTTP API: append `/api/json` to any URL for JSON data; auth via HTTP Basic (username + API token)
@@ -105,10 +107,97 @@ This repository provides standardized automated workflows for managing issues. A
 - Package manager: **uv** (not pip). Use `uv sync`, `uv run`, etc.
 
 ## Common Commands
-- `make test` — run tests (`uv run pytest -v`)
-- `make lint` — check linting and formatting
+- `make test` — run the mocked suites (`uv run pytest -v`); excludes e2e
+- `make bats` — run the shell script tests (`npx --yes bats tests/bats`)
+- `make e2e` — build the zipapp, then run the end-to-end suite against it
+- `make e2e-offline` — the e2e scenarios that need no container
+- `make lint` — check linting and formatting (includes `shellcheck` and `spell`)
+- `make shellcheck` — static analysis for every shell source, the same pinned
+  `shellcheck` version CI runs
+- `make spell` — spell check, the same `typos` version CI runs
 - `make format` — auto-fix lint and formatting
 - `make build` — build a shiv executable
+
+## Testing expectations
+**Every change to behaviour ships with tests in both layers.** They are doing
+different jobs:
+
+- **Unit tests carry the coverage.** `tests/` is where breadth lives — every
+  branch, every flag permutation, every error path, the output shapes.
+  Fixtures are free and no process is spawned, so this is the cheap place to
+  be exhaustive.
+- **End-to-end scenarios do the validation.** `tests/e2e/features/` proves the
+  thing actually works: the real binary, real exit codes, the real stdout and
+  stderr file descriptors, and a wire format Jenkins genuinely accepts. A new
+  command wants at least one scenario walking its happy path, plus one for any
+  contract a unit test cannot see — an exit code, a stream split, something
+  touching disk, a guard firing before any network call.
+
+Shell scripts have their own suite, `tests/bats/`, and the same expectation
+applies: touch a script, cover the change, and run `make bats`.
+
+Some overlap between the layers is expected and fine; the same behaviour being
+covered in unit and validated end to end is the point, not waste. What does not
+belong end to end is *breadth* — a scenario per flag permutation buys little
+and costs a process spawn, or a container boot, on every run.
+
+Not every scenario needs Jenkins. `tests/e2e/features/cli_contract.feature`
+runs container-free (`make e2e-offline`) and is the right home for anything
+provable without a server — guards that fire before any network call,
+packaging, completions, config handling. Reach for the container only when the
+assertion is about what Jenkins itself accepts or returns.
+
+A pure refactor with no user-visible change may leave the scenarios alone. If
+you add a user-facing behaviour and no scenario, say in the PR description why.
+
+### Which layer am I writing?
+**If it fakes any part of the system under test, it is a unit test** — it
+belongs in `tests/`, not `tests/e2e/`. Faking means `monkeypatch`, but equally
+`requests-mock` or `CliRunner`. `tests/e2e/` drives the built binary as a real
+subprocess, which is the only layer that sees true process exit codes, the real
+stdout and stderr file descriptors, and the zipapp's own packaging.
+
+### Testing the shell scripts
+- `tests/bats/` covers `install.sh` and everything in `utils/`. Each test runs
+  the real script as a subprocess with `gh`, `git`, `curl`, `tar`, `install`
+  and `python3` stubbed on `PATH`, and `HOME` redirected into a temporary
+  directory. Offline, and safe to run anywhere.
+- Those stubs are faking, by the rule above, which is why this suite lives
+  under `tests/` and not `tests/e2e/`.
+- The helper reads the binary name from `[project.scripts]` in
+  `pyproject.toml`; nothing hardcodes it.
+- Stubs record their arguments: assert *what the script asked for*, not only
+  what it printed. `assert_called_arg` matches a whole argument, so a quoting
+  bug cannot hide behind a flattened command line.
+- Run `make bats` whenever you touch a shell script.
+
+### Install the Jenkins plugins the scenarios need
+Anything beyond base Jenkins — lockable resources, matrix auth, a plugin's
+build step — can only be covered end to end if the plugin is baked into the
+fixture image. Install it; do not drop the layer because the plugin is absent.
+
+1. Add it to the **direct** block at the top of
+   `tests/e2e/docker/plugins.txt`, with its version pinned.
+2. **Regenerate the whole file**: `cd tests/e2e/docker`, build the image, then
+   read the installed versions back out of it with the command in the file's
+   own header, and replace the transitive block with what it prints.
+   `jenkins-plugin-cli` resolves transitive dependencies to
+   latest-compatible, so one new direct plugin moves transitive versions too.
+   The file holds the entire resolved closure, every entry pinned, because
+   silent version drift is the class of bug this suite exists to catch.
+3. Configure the instance in `tests/e2e/docker/casc.yaml` only *after* the
+   plugin is installed. JCasC validates the whole document at boot and rejects
+   a section whose plugin is absent, so Jenkins fails to start rather than
+   warning — `globalMatrix` without `matrix-auth` broke the fixture exactly
+   this way. If a boot fails after a casc edit, read the container logs before
+   anything else.
+4. Add any seed job as `tests/e2e/docker/jobs/*.xml`, wired into the
+   `jenkins_container` fixture so its name is asserted by the fixture
+   inventory scenario.
+5. Expect the first run after a plugin change to rebuild the image, which is
+   the slow part; it is then cached for the session.
+
+Full rationale, the environment traps, and the pytest pin: `docs/design/testing.md`.
 
 ## Module API contract
 - A leading `_` means "internal to this module". Anything a sibling module
@@ -142,6 +231,23 @@ path unless `core.symlinks=true` and Developer Mode are both enabled.
 
 ## Commit Messages
 - Use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `ci:`).
+- **A `!` after the type, or `BREAKING CHANGE` anywhere in the body, releases a
+  new MAJOR version.** `feat!: drop the old flag` is what took the sibling
+  breakfast repo from 0.107.1 to 1.0.0. These are the *only* things that cause a
+  major bump, so neither is a decoration for "this is important" — use one when
+  you mean to change the first number, and say so in the PR description when you
+  do.
+- The version a merge will release is computed from these messages by
+  `git mkver`, not chosen by hand. The `version` CI job prints it on every pull
+  request, so check it before merging rather than discovering it afterwards.
+- **Mentioning either marker in a commit body counts as using it.** mkver scans
+  every line of every commit message since the last tag for the marker as a
+  substring, so a body explaining that a commit "was marked `feat!:`" reads to
+  mkver exactly like a declaration, and releases a major version. When you need
+  to write about them, break the string: `feat!` without the colon, or spell the
+  footer with a hyphen.
+- `git mkver patch` does not mean "bump the patch number" — it writes whatever
+  version mkver computed into `VERSION`. Never run it on a feature branch.
 
 ## Code Quality
 - **Before every commit:** `make format && make lint && make test`

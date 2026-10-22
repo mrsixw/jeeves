@@ -1,0 +1,71 @@
+# Configuration-as-Code for the end-to-end Jenkins.
+#
+# This file configures the *instance*: the security realm, the authorisation
+# strategy and the executors. It deliberately does not define jobs — those are
+# created by the test fixture over the API after boot, because jobs are
+# per-run state rather than image state, and creating them the way a user
+# would is part of what the suite is for.
+#
+# The credentials below are fixed and public. That is safe only because this
+# instance listens on a throwaway container that is destroyed with the test
+# session. Do not point it at anything real.
+
+jenkins:
+  systemMessage: "jeeves end-to-end fixture — ephemeral, do not trust"
+
+  # Two executors so a queued build can actually start while another runs.
+  # With one, the --wait scenarios would serialise and look like a hang.
+  numExecutors: 2
+  mode: NORMAL
+
+  securityRealm:
+    local:
+      # Signup disabled: the only account is the one declared here, so a
+      # scenario cannot accidentally authenticate as somebody else.
+      allowsSignup: false
+      users:
+        - id: "jeeves-e2e"
+          # Used once, by the fixture, to mint an API token. Every jeeves
+          # invocation then authenticates with the token — the path the
+          # project documents — rather than with this password.
+          password: "jeeves-e2e-password"
+
+  # Full control for anyone logged in — which is only the one user above.
+  #
+  # Core's own strategy, deliberately, rather than the finer-grained
+  # `globalMatrix`: that lives in the matrix-auth plugin, and an extra plugin
+  # is boot time paid on every session for authorisation detail no scenario
+  # asserts on.
+  #
+  # Anonymous read is off so a scenario that loses its credentials fails
+  # loudly instead of quietly succeeding as anonymous — which would make every
+  # authentication assertion here worthless.
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # Nothing should reach outside the container. An agent port would be the
+  # one listener that could.
+  slaveAgentPort: -1
+
+security:
+  # The API token is minted by the fixture through the web API, so legacy
+  # token creation stays off and tokens are not auto-generated at signup —
+  # the fixture asks for one explicitly, the way a user would.
+  apiToken:
+    creationOfLegacyTokenEnabled: false
+    tokenGenerationOnCreationEnabled: false
+
+# Note on CSRF: there is deliberately no configuration for it here. It is on
+# by default in modern Jenkins, and `security.csrf` is not a JCasC section —
+# setting it fails the boot outright. Leaving the default is also what the
+# suite wants: jeeves fetches a crumb before every POST, and disabling CSRF
+# would silently stop exercising that path, which is one of the few things
+# only a real Jenkins can confirm.
+
+unclassified:
+  # Jenkins uses this to build absolute URLs in API responses. Left as the
+  # loopback default; the fixture asserts on paths, not on this host, because
+  # the container's address is not known until it is running.
+  location:
+    adminAddress: "jeeves-e2e@example.invalid"
