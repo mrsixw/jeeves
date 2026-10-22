@@ -1,0 +1,43 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  A freestyle job for the end-to-end suite.
+
+  Freestyle matters alongside the pipeline job because the two report SCM
+  changes differently: freestyle builds carry a single `changeSet`, pipeline
+  builds a `changeSets[]` array. JenkinsClient.changes() asks for both, and
+  only a real Jenkins of each type proves we read whichever one arrives.
+
+  Parameterised so the `build` scenarios can exercise
+  buildWithParameters — which must be sent as a form body, not a query
+  string, a rule no mock enforces.
+-->
+<project>
+  <description>jeeves end-to-end fixture: freestyle</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>GREETING</name>
+          <description>Echoed to the console so a scenario can read it back.</description>
+          <defaultValue>default-greeting</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <scm class="hudson.scm.NullSCM"/>
+  <canRoam>true</canRoam>
+  <disabled>false</disabled>
+  <triggers/>
+  <concurrentBuild>false</concurrentBuild>
+  <builders>
+    <hudson.tasks.Shell>
+      <!-- Deliberately quick: every second here is paid on every run. -->
+      <command>echo "greeting=$GREETING"
+echo "freestyle fixture build $BUILD_NUMBER"</command>
+    </hudson.tasks.Shell>
+  </builders>
+  <publishers/>
+  <buildWrappers/>
+</project>
