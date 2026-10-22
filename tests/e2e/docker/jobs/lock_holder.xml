@@ -1,0 +1,48 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  A pipeline that takes a real lock and holds it, so a scenario can observe the
+  `locked` state.
+
+  This matters because `locked` is not reachable any other way. Reserving a
+  resource makes it `reserved`; only a build holding the plugin's `lock` step
+  makes it `locked`, and only then do `lockCause` and `buildName` carry
+  anything. Those fields are the part of jeeves' record shape that a mock can
+  invent and a reservation cannot reach.
+
+  HOLD_SECONDS is a parameter so a scenario can ask for a window it can
+  comfortably assert inside, rather than racing a hardcoded sleep.
+-->
+<flow-definition plugin="workflow-job">
+  <description>jeeves end-to-end fixture: holds a lockable resource</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>HOLD_SECONDS</name>
+          <description>How long to keep the lock before releasing it.</description>
+          <defaultValue>30</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>pipeline {
+    agent any
+    stages {
+        stage('Hold') {
+            steps {
+                lock(resource: 'e2e-lock-held') {
+                    echo "holding e2e-lock-held"
+                    sleep(time: Integer.parseInt(params.HOLD_SECONDS), unit: 'SECONDS')
+                }
+            }
+        }
+    }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

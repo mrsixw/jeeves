@@ -154,6 +154,16 @@ class JenkinsFixture:
     pipeline_job: str
     folder: str
     nested_job: str
+    lock_holder_job: str
+
+    # Declared in casc.yaml rather than created here, because the plugin keeps
+    # them in global configuration: they are part of the image's shape, not
+    # per-run state. The names are spelled literally in the feature file, and
+    # the fixture inventory scenario guards the duplication.
+    free_resource: str = "e2e-lock-free"
+    spare_resource: str = "e2e-lock-spare"
+    held_resource: str = "e2e-lock-held"
+    pool_label: str = "e2e-pool"
 
     @property
     def nested_path(self) -> str:
@@ -238,6 +248,18 @@ def jenkins_container(container_runtime):
             )
             jobs[kind] = job_name
 
+        # Holds e2e-lock-held for as long as a scenario asks, so the
+        # `locked` state has somewhere to happen. Reserving a resource makes
+        # it `reserved`; only a build inside the plugin's `lock` step makes it
+        # `locked`, and only then are lockCause and buildName populated.
+        lock_holder = "e2e-lock-holder"
+        create_job(
+            base_url,
+            token=token,
+            name=lock_holder,
+            config_xml=(DOCKER_DIR / "jobs" / "lock_holder.xml").read_text(),
+        )
+
         # A folder with a job inside it, so a scenario can prove
         # normalize_jenkins_path's /job/<folder>/job/<name> encoding against a
         # real Jenkins. A mock would accept whatever shape we invented.
@@ -264,6 +286,7 @@ def jenkins_container(container_runtime):
             pipeline_job=jobs["pipeline"],
             folder=folder,
             nested_job="nested",
+            lock_holder_job=lock_holder,
         )
     except NotReachable as exc:
         # Must precede the ProvisionError branch — NotReachable subclasses it.
@@ -339,6 +362,10 @@ def run_jeeves(jeeves_binary, cli_env, sandbox):
                 text=True,
                 timeout=timeout,
                 check=False,
+                # Never inherit the terminal. Nothing should read stdin, but a
+                # command that did would block on the developer's keyboard and
+                # look like a hang rather than a bug.
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired as exc:
             pytest.fail(

@@ -3,7 +3,7 @@
 #
 # Why the whole set. Pinning the base image by digest and naming three plugins
 # is not reproducibility: jenkins-plugin-cli resolves transitive dependencies
-# to latest-compatible, so those three pulled in ~54 more at whatever versions
+# to latest-compatible, so the direct asks pulled in ~54 more at whatever versions
 # were current that day. Rebuilding the same Dockerfile next month would
 # install different ones. Silent version drift is the class of bug this suite
 # exists to catch, so it must not be in the suite itself.
@@ -29,6 +29,11 @@ configuration-as-code:2136.veb_3a_554550b_f
 workflow-aggregator:608.v67378e9d3db_1
 # folders, to exercise normalize_jenkins_path's /job/x/job/y encoding
 cloudbees-folder:6.1106.v3a_d9a_6d2465e
+# the surface behind `jeeves plugin lockable-resources`. Added nothing
+# transitively — its dependencies were already in the set below, and because
+# those are pinned, jenkins-plugin-cli honoured the pins rather than moving
+# them. A different plugin may well not be so tidy; regenerate and diff.
+lockable-resources:1576.v217259b_f9976
 
 # ── pulled in transitively, pinned so they cannot drift ──────────────────────
 antisamy-markup-formatter:173.v680e3a_b_69ff3
