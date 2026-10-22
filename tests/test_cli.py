@@ -2891,7 +2891,12 @@ def test_lockable_reserve_already_ours_exits_zero(jenkins):
 
 
 def test_lockable_unreserve_posts_resource(jenkins):
+    # Somebody holds it, so there is a reservation to release. unreserve reads
+    # before it posts, because the plugin answers 200 either way.
     _lockable_post_http(jenkins, "unreserve")
+    _lockable_http(
+        jenkins, [_lockable_resource("rig-01", free=False, reservedBy="jeeves")]
+    )
     result = _lockable_invoke("unreserve", "rig-01")
     assert result.exit_code == 0
     assert "released back to the household" in result.stdout
@@ -2899,7 +2904,8 @@ def test_lockable_unreserve_posts_resource(jenkins):
 
 
 def test_lockable_unreserve_of_a_free_resource_exits_zero(jenkins):
-    _lockable_post_http(jenkins, "unreserve", status_code=403)
+    """Nothing to release, so say so rather than claim a release."""
+    _lockable_post_http(jenkins, "unreserve")
     _lockable_http(jenkins, [_lockable_resource("rig-01")])
     result = _lockable_invoke("unreserve", "rig-01")
     assert result.exit_code == 0

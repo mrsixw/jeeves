@@ -55,11 +55,16 @@ forwarding to the previous page — so the status code is the only meaningful pa
   the plugin is missing; otherwise a 404 from `reserve`/`unreserve`/`unlock`/`reset` means the
   resource is unknown, while a 404 from `createResource`/`deleteResource` means the plugin is too
   old — those two are `@Restricted(NoExternalUse.class)` upstream and absent from older releases.
-- Unreserving a resource nobody holds is a **403** for anyone short of an administrator, which is
-  really "there was nothing to release" — hence the idempotent treatment. Test `reservedBy`, not
-  `free`: a resource locked by a build is not free yet carries no reservation to release.
-- `unlock` and `reset` read the resource before posting, because the plugin answers 200 whether or
-  not there was anything to do — so a blind POST would have us claim work we did not perform.
+- `unreserve`, `unlock` and `reset` **read the resource before posting**, because the plugin
+  answers **200 whether or not there was anything to do** — so a blind POST would have us claim
+  work we did not perform. Reading first also means an absent resource is reported as unknown
+  rather than as one already in good order.
+- Test `reservedBy`, not `free`, when deciding whether there is a reservation to release: a
+  resource locked by a build is not free yet carries no reservation.
+- A **403** from `unreserve` is kept as a race guard only — the reservation being dropped between
+  our read and our POST. Earlier notes here claimed the plugin 403s when nobody holds the
+  resource; it does not, on 1576.v217259b_f9976. The end-to-end suite caught jeeves reporting a
+  release it had not performed, which is the kind of wire assumption only a real plugin settles.
 - Out of scope: `/lockable-resources/remote/v1/`, a heartbeat-driven lock-holding REST protocol
   for long-lived external clients.
 

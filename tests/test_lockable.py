@@ -210,19 +210,31 @@ def test_reserve_unauthenticated(lockable: LockableResources) -> None:
 
 def test_unreserve_posts_the_resource(lockable: LockableResources) -> None:
     with req_mock.Mocker() as m:
+        m.get(
+            ROSTER,
+            json={"resources": [_resource("r1", free=False, reservedBy="jeeves")]},
+        )
         adapter = m.post(f"{BASE}/lockable-resources/unreserve", status_code=200)
         assert lockable.unreserve("r1") == "unreserved"
     assert parse_qs(adapter.last_request.text) == {"resource": ["r1"]}
 
 
-def test_unreserve_of_a_free_resource_is_idempotent(
+def test_unreserve_of_a_free_resource_posts_nothing(
     lockable: LockableResources,
 ) -> None:
-    """Jenkins 403s a non-admin releasing a reservation nobody holds."""
+    """The plugin answers 200 whether or not there was anything to release.
+
+    So the status cannot be read as evidence of work, and unreserve has to
+    look before it posts. Asserting the POST never happens is the point: the
+    earlier version of this test mocked a 403 that the current plugin does not
+    send, and the end-to-end suite caught it claiming a release it had not
+    performed.
+    """
     with req_mock.Mocker() as m:
-        m.post(f"{BASE}/lockable-resources/unreserve", status_code=403)
         m.get(ROSTER, json={"resources": [_resource("r1", free=True)]})
+        adapter = m.post(f"{BASE}/lockable-resources/unreserve", status_code=200)
         assert lockable.unreserve("r1") == "already"
+    assert adapter.call_count == 0
 
 
 def test_unreserve_of_a_locked_but_unreserved_resource_is_idempotent(
@@ -230,17 +242,52 @@ def test_unreserve_of_a_locked_but_unreserved_resource_is_idempotent(
 ) -> None:
     """A build's lock makes a resource unfree while leaving nothing reserved."""
     with req_mock.Mocker() as m:
-        m.post(f"{BASE}/lockable-resources/unreserve", status_code=403)
         m.get(
             ROSTER,
             json={
                 "resources": [_resource("r1", free=False, locked=True, reservedBy=None)]
             },
         )
+        adapter = m.post(f"{BASE}/lockable-resources/unreserve", status_code=200)
+        assert lockable.unreserve("r1") == "already"
+    assert adapter.call_count == 0
+
+
+def test_unreserve_of_an_unknown_resource_says_so(
+    lockable: LockableResources,
+) -> None:
+    """Reading first must not turn an absent resource into "already free"."""
+    with req_mock.Mocker() as m:
+        m.get(ROSTER, json={"resources": []})
+        adapter = m.post(f"{BASE}/lockable-resources/unreserve", status_code=200)
+        with pytest.raises(LockableError) as excinfo:
+            lockable.unreserve("r1")
+    assert excinfo.value.reason == "unknown"
+    assert adapter.call_count == 0
+
+
+def test_unreserve_403_after_the_reservation_vanishes_is_idempotent(
+    lockable: LockableResources,
+) -> None:
+    """The race the 403 branch still guards.
+
+    The pre-flight read sees a reservation, somebody else releases it, and the
+    POST is then refused. That is a no-op, not a permission problem.
+    """
+    with req_mock.Mocker() as m:
+        m.get(
+            ROSTER,
+            [
+                {"json": {"resources": [_resource("r1", free=False, reservedBy="me")]}},
+                {"json": {"resources": [_resource("r1", free=True)]}},
+            ],
+        )
+        m.post(f"{BASE}/lockable-resources/unreserve", status_code=403)
         assert lockable.unreserve("r1") == "already"
 
 
 def test_unreserve_of_someone_elses_is_forbidden(lockable: LockableResources) -> None:
+    """Somebody holds it, so the pre-flight passes and the POST is refused."""
     with req_mock.Mocker() as m:
         m.post(f"{BASE}/lockable-resources/unreserve", status_code=403)
         m.get(

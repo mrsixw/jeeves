@@ -135,6 +135,10 @@ class LockableResources:
         return self._mutate("reserve", name, data, "reserved")
 
     def unreserve(self, name: str) -> str:
+        # Reservedness, not freeness: a resource locked by a build is not
+        # free, yet carries no reservation to release.
+        if not (self._state(name).get("reservedBy") or ""):
+            return "already"
         return self._mutate("unreserve", name, {"resource": name}, "unreserved")
 
     def unlock(self, name: str) -> str:
@@ -194,10 +198,12 @@ class LockableResources:
         if exc.status == 404:
             return self._interpret_404(exc, endpoint, name)
         if exc.status == 403:
-            # Unreserving a resource nobody holds is a 403 for anyone short of
-            # an administrator, which is really "there was nothing to release".
-            # Reserved-ness, not freeness: a resource locked by a build is not
-            # free, yet still carries no reservation to release.
+            # Kept as a race guard rather than the main path. `unreserve` now
+            # reads the reservation before posting, so the usual "nothing to
+            # release" case never reaches here; this catches the reservation
+            # being dropped by somebody else in between, which is a no-op
+            # rather than a permission problem. Plugin versions that do 403
+            # instead of 200 also land here.
             if endpoint == "unreserve" and not self._reserved_by(name):
                 return "already"
             raise LockableError("forbidden", name) from exc
@@ -238,10 +244,19 @@ class LockableResources:
     def _state(self, name: str) -> dict:
         """The resource as it stands, for verbs whose POST cannot report it.
 
-        Unlocking or resetting something already in good order is a silent
-        no-op upstream, answering 200 indistinguishably from real work. These
-        two therefore read before they write, rather than claim to have done
-        something they did not do.
+        Unreserving, unlocking or resetting something already in good order is
+        a silent no-op upstream, answering 200 indistinguishably from real
+        work. These three therefore read before they write, rather than claim
+        to have done something they did not do.
+
+        ``unreserve`` joined them on evidence: the end-to-end suite caught it
+        reporting "released back to the household" for a resource nobody held.
+        It had relied on the plugin answering 403 in that case, which the
+        current release does not — it answers 200. Only a real plugin could
+        settle that, which is why the scenario exists.
+
+        It also means an unknown resource is reported as unknown here, rather
+        than being mistaken for one already in good order.
         """
         item = self.resource(name)
         if item is None:
