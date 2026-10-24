@@ -3089,3 +3089,272 @@ def test_butler_error_401(jenkins):
     result = _lockable_invoke("list")
     assert result.exit_code == 1
     assert "A 401" in result.stderr
+
+
+# ── pipeline input steps ─────────────────────────────────────────────────────
+
+_INPUT_BUILD = "job/deploy/42"
+
+
+def _input_execution(input_id="Ship", **step):
+    body = {
+        "id": input_id,
+        "message": "Ship it?",
+        "ok": "Ship it",
+        "cancel": None,
+        "submitter": None,
+        "parameters": [],
+    }
+    body.update(step)
+    return {"id": input_id, "settled": False, "input": body}
+
+
+def _input_http(jenkins, *pending_lists):
+    """The build resolves to #42; successive reads return each pending list."""
+    jenkins.get(
+        api("job/deploy/lastBuild"),
+        json={"number": 42, "url": f"{JENKINS_URL}/{_INPUT_BUILD}/"},
+    )
+    jenkins.get(
+        api(f"{_INPUT_BUILD}/input"),
+        [{"json": {"executions": p}} for p in pending_lists],
+    )
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+
+
+def _input_invoke(*args, **kwargs):
+    return _invoke("--no-colour", "--no-update-check", "plugin", "input", *args)
+
+
+def _input_posts(jenkins):
+    return [r for r in jenkins.request_history if r.method == "POST"]
+
+
+def test_input_group_lists_every_verb():
+    result = _invoke("plugin", "input", "--help")
+    assert result.exit_code == 0
+    assert _listed_commands(result.output) == {"list", "approve", "reject"}
+
+
+def test_plugin_group_lists_input():
+    result = _invoke("plugin", "--help")
+    assert "input" in _listed_commands(result.output)
+
+
+def test_input_list_table(jenkins):
+    params = [{"name": "TARGET", "type": "ChoiceParameterDefinition"}]
+    _input_http(jenkins, [_input_execution(submitter="ops", parameters=params)])
+    result = _input_invoke("list", "deploy")
+    assert result.exit_code == 0
+    assert "Ship it?" in result.stdout
+    assert "TARGET (choice)" in result.stdout
+    assert "ops" in result.stdout
+    assert "Build #42 of 'deploy' awaits your word." in result.stderr
+    assert "awaits your word" not in result.stdout
+
+
+def test_input_list_json_record_keys(jenkins):
+    _input_http(jenkins, [_input_execution()])
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "plugin",
+        "input",
+        "list",
+        "deploy",
+    )
+    assert result.exit_code == 0
+    (record,) = _json.loads(result.stdout)
+    assert set(record) == {
+        "id",
+        "message",
+        "ok",
+        "cancel",
+        "submitter",
+        "parameters",
+        "url",
+    }
+    assert record["url"] == f"{JENKINS_URL}/{_INPUT_BUILD}/input/"
+
+
+def test_input_list_empty_state_on_stderr(jenkins):
+    _input_http(jenkins, [])
+    result = _input_invoke("list", "deploy")
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert "awaits no one's word" in result.stderr
+
+
+def test_input_list_with_no_input_action_is_empty(jenkins):
+    """A build that never reached an input step has no /input/ at all."""
+    jenkins.get(api("job/deploy/lastBuild"), json={"number": 42, "url": ""})
+    jenkins.get(api(f"{_INPUT_BUILD}/input"), status_code=404)
+    result = _input_invoke("list", "deploy")
+    assert result.exit_code == 0
+    assert "awaits no one's word" in result.stderr
+
+
+def test_input_list_unknown_build_exits_1(jenkins):
+    jenkins.get(api("job/deploy/99"), status_code=404)
+    result = _input_invoke("list", "deploy", "99")
+    assert result.exit_code == 1
+    assert "I find no build '99' of 'deploy', sir." in result.stderr
+    assert result.stdout == ""
+
+
+def test_input_approve_posts_proceed_empty(jenkins):
+    _input_http(jenkins, [_input_execution()], [])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceedEmpty"), status_code=200)
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 0
+    assert "✅ Very good. Build #42 of 'deploy' may proceed." in result.stdout
+    assert [r.path for r in _input_posts(jenkins)] == [
+        f"/{_INPUT_BUILD}/input/ship/proceedempty"
+    ]
+
+
+def test_input_approve_sends_params_as_json_form_field(jenkins):
+    params = [
+        {
+            "name": "TARGET",
+            "type": "StringParameterDefinition",
+            "defaultParameterValue": {"value": "eu"},
+        }
+    ]
+    _input_http(jenkins, [_input_execution(parameters=params)], [])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceed"), status_code=200)
+    result = _input_invoke("approve", "deploy", "--param", "TARGET=us")
+    assert result.exit_code == 0
+    (post,) = _input_posts(jenkins)
+    sent = _json.loads(parse_qs(post.text)["json"][0])
+    assert sent == {"parameter": [{"name": "TARGET", "value": "us"}]}
+
+
+def test_input_approve_bad_param_format_exits_before_any_request(jenkins):
+    result = _input_invoke("approve", "deploy", "--param", "oops")
+    assert result.exit_code == 1
+    assert "'oops' is not in KEY=VALUE format" in result.stderr
+    assert jenkins.request_history == []
+
+
+def test_input_approve_unknown_param_exits_1(jenkins):
+    params = [{"name": "TARGET", "type": "StringParameterDefinition"}]
+    _input_http(jenkins, [_input_execution(parameters=params)])
+    result = _input_invoke("approve", "deploy", "--param", "NOPE=1")
+    assert result.exit_code == 1
+    assert "no parameter named 'NOPE'" in result.stderr
+    assert "It takes: TARGET." in result.stderr
+    assert _input_posts(jenkins) == []
+
+
+def test_input_approve_bad_boolean_exits_1(jenkins):
+    params = [{"name": "DRY", "type": "BooleanParameterDefinition"}]
+    _input_http(jenkins, [_input_execution(parameters=params)])
+    result = _input_invoke("approve", "deploy", "--param", "DRY=perhaps")
+    assert result.exit_code == 1
+    assert "'DRY' wants true or false, sir, not 'perhaps'." in result.stderr
+
+
+def test_input_approve_nothing_pending_exits_0(jenkins):
+    _input_http(jenkins, [])
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 0
+    assert "Nothing wanted doing." in result.stdout
+    assert _input_posts(jenkins) == []
+
+
+def test_input_approve_ambiguous_names_the_candidates(jenkins):
+    _input_http(jenkins, [_input_execution("A"), _input_execution("B")])
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 1
+    assert "awaits several decisions" in result.stderr
+    assert "--id: A, B." in result.stderr
+
+
+def test_input_approve_with_id_among_several(jenkins):
+    _input_http(
+        jenkins, [_input_execution("A"), _input_execution("B")], [_input_execution("A")]
+    )
+    jenkins.post(url(f"{_INPUT_BUILD}/input/B/proceedEmpty"), status_code=200)
+    result = _input_invoke("approve", "deploy", "--id", "B")
+    assert result.exit_code == 0
+    assert "may proceed" in result.stdout
+
+
+def test_input_approve_unknown_id_exits_1(jenkins):
+    _input_http(jenkins, [_input_execution("A")])
+    result = _input_invoke("approve", "deploy", "--id", "Z")
+    assert result.exit_code == 1
+    assert "awaits no decision called 'Z'" in result.stderr
+    assert "Those pending are: A." in result.stderr
+
+
+def test_input_approve_refused_names_the_submitter(jenkins):
+    ex = _input_execution(submitter="ops")
+    _input_http(jenkins, [ex], [ex])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceedEmpty"), status_code=400)
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 1
+    assert "declined to accept the decision" in result.stderr
+    assert "It is reserved for ops." in result.stderr
+    assert "may proceed" not in result.stdout
+
+
+def test_input_approve_403_exits_1(jenkins):
+    _input_http(jenkins, [_input_execution()])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceedEmpty"), status_code=403)
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 1
+    assert "A 403" in result.stderr
+
+
+def test_input_approve_401_exits_1(jenkins):
+    _input_http(jenkins, [_input_execution()])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceedEmpty"), status_code=401)
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 1
+    assert "A 401" in result.stderr
+
+
+def test_input_approve_unexpected_error_uses_generic_butler_error(jenkins):
+    _input_http(jenkins, [_input_execution()])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/proceedEmpty"), status_code=502)
+    result = _input_invoke("approve", "deploy")
+    assert result.exit_code == 1
+    assert "A 502" in result.stderr
+
+
+def test_input_reject_posts_abort(jenkins):
+    _input_http(jenkins, [_input_execution()], [])
+    jenkins.post(url(f"{_INPUT_BUILD}/input/Ship/abort"), status_code=200)
+    result = _input_invoke("reject", "deploy")
+    assert result.exit_code == 0
+    assert "I have conveyed your regrets" in result.stdout
+    assert [r.path for r in _input_posts(jenkins)] == [
+        f"/{_INPUT_BUILD}/input/ship/abort"
+    ]
+
+
+def test_input_reject_nothing_pending_exits_0(jenkins):
+    _input_http(jenkins, [])
+    result = _input_invoke("reject", "deploy")
+    assert result.exit_code == 0
+    assert "Nothing wanted doing." in result.stdout
+
+
+def test_input_reject_explicit_build_number(jenkins):
+    jenkins.get(api("job/deploy/7"), json={"number": 7, "url": ""})
+    jenkins.get(
+        api("job/deploy/7/input"),
+        [
+            {"json": {"executions": [_input_execution()]}},
+            {"json": {"executions": []}},
+        ],
+    )
+    jenkins.get(url("crumbIssuer/api/json"), status_code=404)
+    jenkins.post(url("job/deploy/7/input/Ship/abort"), status_code=200)
+    result = _input_invoke("reject", "deploy", "7")
+    assert result.exit_code == 0
+    assert "Build #7 of 'deploy'" in result.stdout

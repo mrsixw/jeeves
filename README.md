@@ -28,6 +28,7 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves build rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
 | `jeeves node list [--stats]` | List build nodes (agents); `--stats` adds health metrics |
 | `jeeves plugin lockable-resources <verb>` | Read and manage lockable resources (requires the `lockable-resources` plugin) |
+| `jeeves plugin input list\|approve\|reject JOB [BUILD]` | Settle a pipeline paused at an `input` step (requires the `pipeline-input-step` plugin) |
 
 ### Deprecated spellings
 

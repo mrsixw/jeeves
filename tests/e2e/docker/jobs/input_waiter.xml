@@ -1,0 +1,40 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  A pipeline that stops at an `input` step and waits, so a scenario can settle
+  it with `jeeves plugin input approve|reject`.
+
+  The input carries one parameter with a default, and echoes what it received.
+  That makes the console the proof of what Jenkins actually parsed out of the
+  `json` form body — the wire format a mock would accept in any shape.
+
+  `agent none` because an input step needs no executor. Waiting on one would
+  tie up one of the fixture's two for as long as the scenario takes.
+-->
+<flow-definition plugin="workflow-job">
+  <description>jeeves end-to-end fixture: waits at an input step</description>
+  <keepDependencies>false</keepDependencies>
+  <properties/>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>pipeline {
+    agent none
+    stages {
+        stage('Ask') {
+            steps {
+                script {
+                    def target = input(
+                        id: 'Release',
+                        message: 'Ship it?',
+                        ok: 'Ship it',
+                        parameters: [string(name: 'TARGET', defaultValue: 'eu')]
+                    )
+                    echo "target=${target}"
+                }
+            }
+        }
+    }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

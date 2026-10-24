@@ -107,6 +107,40 @@ Reserving, releasing and creating each need their own Jenkins permission
 (`RESERVE`, `UNLOCK` and `CONFIGURE` respectively), and releasing a reservation
 is restricted to its holder or an administrator.
 
+## Pipeline input steps
+
+A pipeline paused at an `input` step ("Ship it to production?") can be settled
+from the terminal. The step comes from the
+[`pipeline-input-step`](https://plugins.jenkins.io/pipeline-input-step/)
+plugin, which every standard Pipeline installation includes, so these commands
+live under the `plugin` group too. `BUILD` defaults to `lastBuild`.
+
+```bash
+jeeves plugin input list deploy                 # what is build #N waiting for?
+jeeves plugin input approve deploy              # proceed, taking the defaults
+jeeves plugin input approve deploy --param TARGET=eu-west   # ...or supplying values
+jeeves plugin input approve deploy 42 --id Release          # one of several pending
+jeeves plugin input reject deploy               # abort the build at the input
+```
+
+Parameters you leave out take the defaults the input declares, exactly as the
+web form would. Boolean parameters accept `true`/`false`, `yes`/`no` or `1`/`0`.
+`--id` is only needed when a build is paused at more than one input at once;
+jeeves names the candidates if you leave it off.
+
+Both verbs are idempotent: a build that awaits nothing says so and exits 0.
+After posting, jeeves reads the input back and only reports success once
+Jenkins shows it settled, so a refusal (an input reserved for another
+`submitter`, or missing Job/Build or Job/Cancel permission) is reported as one.
+
+```console
+$ jeeves plugin input approve deploy
+✅ Very good. Build #42 of 'deploy' may proceed.
+
+$ jeeves plugin input approve deploy
+😴 Build #42 of 'deploy' awaits no one's word. Nothing wanted doing.
+```
+
 ## Config file
 
 ```bash

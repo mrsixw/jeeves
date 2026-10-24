@@ -66,6 +66,7 @@ def _inventory(jenkins_container):
     assert jenkins_container.folder == "e2e-folder"
     assert jenkins_container.nested_job == "nested"
     assert jenkins_container.nested_path == "e2e-folder/nested"
+    assert jenkins_container.input_waiter_job == "e2e-input-waiter"
 
 
 @then(parsers.parse('the Jenkins job "{job}" has at least {count:d} build'))
@@ -225,3 +226,87 @@ def _build_holds(jenkins_container, name):
         f"{name!r} was never locked within 120s. The holder build may have "
         f"failed; the plugin reports {_resources(jenkins_container).get(name)}"
     )
+
+
+def _get(jenkins_container, path, **params):
+    resp = requests.get(
+        f"{jenkins_container.base_url}/{path.lstrip('/')}",
+        params=params,
+        auth=(jenkins_container.user, jenkins_container.token),
+        timeout=15,
+    )
+    return resp
+
+
+def _last_build(jenkins_container, job):
+    resp = _get(
+        jenkins_container, f"job/{job}/lastBuild/api/json", tree="number,result"
+    )
+    assert resp.status_code == 200, f"lastBuild of {job!r} said {resp.status_code}"
+    return resp.json()
+
+
+def _pending_inputs(jenkins_container, job, number):
+    """The plugin's own view of a build's pending inputs, not jeeves'."""
+    resp = _get(
+        jenkins_container,
+        f"job/{job}/{number}/input/api/json",
+        tree="executions[id,settled]",
+    )
+    if resp.status_code == 404:
+        return []
+    assert resp.status_code == 200, f"input action said {resp.status_code}"
+    return [e for e in resp.json().get("executions", []) if not e.get("settled")]
+
+
+@given(parsers.parse('a build of "{job}" is paused at an input'))
+def _paused_at_input(jenkins_container, job):
+    """Trigger the job and wait until Jenkins itself reports it paused.
+
+    Polls the plugin rather than sleeping: the build must be queued, started,
+    and reach the step before /input/ even exists.
+    """
+    before = _get(jenkins_container, f"job/{job}/api/json", tree="nextBuildNumber")
+    assert before.status_code == 200, f"{job!r} said {before.status_code}"
+    number = before.json()["nextBuildNumber"]
+
+    resp = requests.post(
+        f"{jenkins_container.base_url}/job/{job}/build",
+        auth=(jenkins_container.user, jenkins_container.token),
+        timeout=30,
+    )
+    assert resp.status_code in (200, 201), f"trigger said {resp.status_code}"
+
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        build = _get(jenkins_container, f"job/{job}/{number}/api/json", tree="number")
+        if build.status_code == 200 and _pending_inputs(jenkins_container, job, number):
+            return
+        time.sleep(1)
+    pytest.fail(f"build #{number} of {job!r} never paused at an input within 120s")
+
+
+@then(parsers.parse('the last build of "{job}" finishes with result "{result}"'))
+def _finishes_with(jenkins_container, job, result):
+    deadline = time.monotonic() + 120
+    seen = None
+    while time.monotonic() < deadline:
+        seen = _last_build(jenkins_container, job).get("result")
+        if seen is not None:
+            break
+        time.sleep(1)
+    assert seen == result, f"expected {result!r}, Jenkins reports {seen!r}"
+
+
+@then(parsers.parse('the console of the last build of "{job}" contains "{text}"'))
+def _console_contains(jenkins_container, job, text):
+    resp = _get(jenkins_container, f"job/{job}/lastBuild/consoleText")
+    assert resp.status_code == 200, f"consoleText said {resp.status_code}"
+    assert text in resp.text, f"{text!r} not in the console:\n{resp.text[-1500:]}"
+
+
+@then(parsers.parse('Jenkins reports nothing pending on the last build of "{job}"'))
+def _nothing_pending(jenkins_container, job):
+    number = _last_build(jenkins_container, job)["number"]
+    pending = _pending_inputs(jenkins_container, job, number)
+    assert not pending, f"build #{number} still awaits {pending}"
