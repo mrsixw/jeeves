@@ -36,6 +36,7 @@ from .provision import (
     ADMIN_USER,
     NotReachable,
     ProvisionError,
+    create_folder_credential,
     create_job,
     free_port,
     mint_api_token,
@@ -160,6 +161,12 @@ class JenkinsFixture:
     # them in global configuration: they are part of the image's shape, not
     # per-run state. The names are spelled literally in the feature file, and
     # the fixture inventory scenario guards the duplication.
+    # Declared in casc.yaml (the first two) or created by the fixture in
+    # e2e-folder's own store (the third), guarded by the credentials inventory.
+    secret_text_credential: str = "e2e-secret-text"
+    domain_credential: str = "e2e-domain-login"
+    folder_credential: str = "e2e-folder-secret"
+
     free_resource: str = "e2e-lock-free"
     spare_resource: str = "e2e-lock-spare"
     held_resource: str = "e2e-lock-held"
@@ -276,6 +283,20 @@ def jenkins_container(container_runtime):
             name="nested",
             config_xml=(DOCKER_DIR / "jobs" / "freestyle.xml").read_text(),
             folder=folder,
+        )
+
+        # A credential in the folder's own store, so `--folder` has an
+        # inherited-versus-local distinction to prove: Jenkins exports only a
+        # context's own stores, and walking up to the root is jeeves' job.
+        # The XML carries no comment because XStream unmarshals it verbatim;
+        # its value is fixed, public and inert.
+        create_folder_credential(
+            base_url,
+            token=token,
+            folder=folder,
+            credential_xml=(
+                DOCKER_DIR / "credentials" / "folder_secret.xml"
+            ).read_text(),
         )
 
         yield JenkinsFixture(

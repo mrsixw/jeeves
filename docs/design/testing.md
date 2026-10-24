@@ -329,6 +329,21 @@ Why each exists:
   because the queue has to assign an executor first and that is not instant
   on a loaded runner.
 
+### The credentials
+
+`e2e-secret-text` (global domain) and `e2e-domain-login` (in `e2e-domain`) are
+declared in `casc.yaml`; `e2e-folder-secret` is created in `e2e-folder`'s own
+store by the fixture, through the plugin's XML `createCredentials` endpoint,
+because folder stores live in the folder's config where JCasC cannot reach
+without job-dsl. The **credentials inventory** scenario asks Jenkins for all
+three.
+
+The folder credential is what makes `--folder` provable: Jenkins exports only
+a context's own stores, so the root's credentials appear in a folder listing
+only because jeeves walked up to fetch them. The secret values are fixed,
+public and inert, and one scenario asserts none of them reaches stdout — the
+property the command most needs to keep.
+
 ### The lockable resources
 
 Declared in `casc.yaml`, not created by the fixture, because the plugin keeps

@@ -31,6 +31,7 @@ from .config import (
     show_config,
     write_default_config,
 )
+from .credentials import CredentialsError, CredentialStores, credential_records
 from .jenkins import JenkinsClient, JenkinsError, normalize_jenkins_path
 from .lockable import LockableError, LockableResources, resource_records
 from .logger import configure as configure_logging
@@ -585,6 +586,11 @@ def plugin_group() -> None:
 @plugin_group.group("lockable-resources")
 def lockable_group() -> None:
     """Manage Lockable Resources (requires the lockable-resources plugin)."""
+
+
+@plugin_group.group("credentials")
+def credentials_group() -> None:
+    """Show credential metadata, never secrets (requires the credentials plugin)."""
 
 
 # ── profile management ───────────────────────────────────────────────────────
@@ -2675,6 +2681,138 @@ def lockable_reset(ctx: _Ctx, name: str) -> None:
         _lockable_say(ctx, f"🧹 '{name}' was already in good order.")
     else:
         _lockable_say(ctx, f"🧹 '{name}' has been restored to good order.")
+
+
+# ── credentials ──────────────────────────────────────────────────────────────
+
+
+def _credentials_error_text(exc: CredentialsError) -> str:
+    """The butler's wording for a named credentials failure.
+
+    ``_butler_fail`` supplies the 🎩, so none of these carry an emoji.
+    """
+    if exc.reason == "plugin-missing":
+        return (
+            "The Credentials plugin does not appear to be installed on this "
+            "Jenkins, sir. Without it there are no keys for me to keep."
+        )
+    if exc.reason == "no-folder":
+        return f"I find no folder '{exc.detail}' on this Jenkins, sir."
+    return (
+        f"I find no credential by the id '{exc.detail}' in any store this "
+        "Jenkins will show me, sir."
+    )
+
+
+def _credentials_act(ctx: _Ctx, action):
+    """Run one credentials read, translating its failures."""
+    try:
+        return action()
+    except CredentialsError as exc:
+        _butler_fail(_credentials_error_text(exc), ctx.colour)
+    except JenkinsError as exc:
+        butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _credentials_columns(ctx: _Ctx, *, include_details: bool) -> list[Column]:
+    def id_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["id"], r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    columns = [
+        Column("id", "ID", table=id_table, plain=lambda r: r["id"]),
+        Column("type", "Type", table=lambda r, _i: r["type"] or "—"),
+        Column("name", "Name", table=lambda r, _i: r["name"] or "—"),
+        Column("store", "Store", table=lambda r, _i: r["store"]),
+        Column("domain", "Domain", table=lambda r, _i: r["domain"]),
+        Column(
+            "folder",
+            "Folder",
+            table=lambda r, _i: r["folder"] or "(root)",
+            plain=lambda r: r["folder"],
+        ),
+    ]
+    if include_details:
+        columns.append(
+            Column(
+                "description",
+                "Description",
+                table=lambda r, _i: r["description"] or "—",
+            )
+        )
+    return columns
+
+
+_CREDENTIALS_FOLDER_OPTION = click.option(
+    "--folder",
+    default=None,
+    metavar="PATH",
+    help="Look from this folder (as folder/sub), including what it inherits.",
+)
+
+
+def _matches(wanted: str, *candidates: str) -> bool:
+    return wanted.casefold() in (c.casefold() for c in candidates)
+
+
+@credentials_group.command("list")
+@_CREDENTIALS_FOLDER_OPTION
+@click.option("--store", default=None, metavar="NAME", help="Only this store.")
+@click.option(
+    "--domain",
+    default=None,
+    metavar="NAME",
+    help="Only this domain (by name; 'Global' or '_' for the global one).",
+)
+@pass_ctx
+def credentials_list(
+    ctx: _Ctx, folder: str | None, store: str | None, domain: str | None
+) -> None:
+    """List the credentials Jenkins will show you — ids and types, not secrets."""
+    client = _make_client(ctx)
+    stores = CredentialStores(client)
+    entries = _credentials_act(ctx, lambda: stores.visible(folder))
+    if store is not None:
+        entries = [e for e in entries if _matches(store, e["store"])]
+    if domain is not None:
+        entries = [e for e in entries if _matches(domain, e["domain"], e["domain_key"])]
+    _emit(
+        ctx,
+        credential_records(entries, client.base_url),
+        _credentials_columns(ctx, include_details=False),
+        header=(
+            "🔑 The keys to the house. Their contents, naturally, remain under lock."
+        ),
+        empty=(
+            "🪝 Not a single key hangs on the board. Jenkins keeps no "
+            "credentials I am permitted to see."
+        ),
+    )
+
+
+@credentials_group.command("show")
+@click.argument("credential_id", metavar="ID")
+@_CREDENTIALS_FOLDER_OPTION
+@pass_ctx
+def credentials_show(ctx: _Ctx, credential_id: str, folder: str | None) -> None:
+    """Show one credential's metadata, and every store holding that id.
+
+    ID is the credential id, as a pipeline would name it.
+    """
+    client = _make_client(ctx)
+    stores = CredentialStores(client)
+    entries = _credentials_act(ctx, lambda: stores.credential(credential_id, folder))
+    _emit(
+        ctx,
+        credential_records(entries, client.base_url),
+        _credentials_columns(ctx, include_details=True),
+        header=f"🔑 Credential '{credential_id}'.",
+        empty=f"🤷 I find no credential by the id '{credential_id}'.",
+    )
 
 
 # ── whoami ───────────────────────────────────────────────────────────────────

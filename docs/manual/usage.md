@@ -107,6 +107,34 @@ Reserving, releasing and creating each need their own Jenkins permission
 (`RESERVE`, `UNLOCK` and `CONFIGURE` respectively), and releasing a reservation
 is restricted to its holder or an administrator.
 
+## Credentials
+
+"Does `deploy-key` exist, and can this folder see it?" — the usual question
+behind a `CredentialNotFoundException`. The
+[`credentials`](https://plugins.jenkins.io/credentials/) plugin answers it, and
+these commands ask on your behalf. **Only metadata is ever fetched**: ids,
+types, names, descriptions, and which store and domain hold them. Jenkins does
+not export secret values over this API, and jeeves never tries another route.
+
+```bash
+jeeves plugin credentials list                       # everything at the root
+jeeves plugin credentials list --folder team/app     # what team/app can see
+jeeves plugin credentials list --domain prod         # one domain ('Global' or '_' for the global one)
+jeeves plugin credentials list --store folder --folder team   # only the folder's own store
+jeeves plugin credentials show deploy-key --folder team/app
+```
+
+`--folder` lists what that folder can *see*: its own store, each parent
+folder's, then the root's, nearest first. Jenkins only exports a folder's own
+store, so jeeves reads each level in turn. When the same id exists at more
+than one level, `show` lists every copy — the nearest is the one a pipeline in
+that folder will use.
+
+```console
+$ jeeves plugin credentials show nope
+🎩 I find no credential by the id 'nope' in any store this Jenkins will show me, sir.
+```
+
 ## Config file
 
 ```bash

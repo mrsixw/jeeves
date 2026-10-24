@@ -3089,3 +3089,211 @@ def test_butler_error_401(jenkins):
     result = _lockable_invoke("list")
     assert result.exit_code == 1
     assert "A 401" in result.stderr
+
+
+# ── credentials ──────────────────────────────────────────────────────────────
+
+
+def _cred_payload(store="system", **domains):
+    return {
+        "stores": {
+            store: {
+                "domains": {
+                    key: {
+                        "urlName": key,
+                        "displayName": "Global" if key == "_" else key,
+                        "credentials": [
+                            {
+                                "id": cid,
+                                "displayName": f"{cid} name",
+                                "typeName": "Secret text",
+                                "description": f"{cid} notes",
+                            }
+                            for cid in ids
+                        ],
+                    }
+                    for key, ids in domains.items()
+                }
+            }
+        }
+    }
+
+
+def _cred_invoke(*args):
+    return _invoke("--no-colour", "--no-update-check", "plugin", "credentials", *args)
+
+
+def test_credentials_group_lists_every_verb():
+    result = _invoke("plugin", "credentials", "--help")
+    assert result.exit_code == 0
+    assert _listed_commands(result.output) == {"list", "show"}
+
+
+def test_plugin_group_lists_credentials():
+    result = _invoke("plugin", "--help")
+    assert "credentials" in _listed_commands(result.output)
+
+
+def test_credentials_list_table(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["gh-token"], prod=["db"]))
+    result = _cred_invoke("list")
+    assert result.exit_code == 0
+    assert "gh-token" in result.stdout
+    assert "Secret text" in result.stdout
+    assert "(root)" in result.stdout
+    assert "keys to the house" in result.stderr
+    assert "keys to the house" not in result.stdout
+    # Description is a show-only column.
+    assert "gh-token notes" not in result.stdout
+
+
+def test_credentials_list_json_record_keys(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["gh-token"]))
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "plugin",
+        "credentials",
+        "list",
+    )
+    assert result.exit_code == 0
+    (record,) = _json.loads(result.stdout)
+    assert record == {
+        "id": "gh-token",
+        "name": "gh-token name",
+        "type": "Secret text",
+        "description": "gh-token notes",
+        "store": "system",
+        "domain": "Global",
+        "folder": "",
+        "url": f"{JENKINS_URL}/credentials/store/system/domain/_/credential/gh-token/",
+    }
+
+
+def test_credentials_list_empty_state_on_stderr(jenkins):
+    jenkins.get(api("credentials"), json={"stores": {}})
+    result = _cred_invoke("list")
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert "Not a single key" in result.stderr
+
+
+@pytest.mark.parametrize("domain", ["prod", "PROD"])
+def test_credentials_list_filters_by_domain_name(jenkins, domain):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["g"], prod=["p"]))
+    result = _invoke(
+        "--format", "json", "plugin", "credentials", "list", "--domain", domain
+    )
+    assert [r["id"] for r in _json.loads(result.stdout)] == ["p"]
+
+
+@pytest.mark.parametrize("domain", ["_", "global"])
+def test_credentials_list_filters_the_global_domain_by_key_or_name(jenkins, domain):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["g"], prod=["p"]))
+    result = _invoke(
+        "--format", "json", "plugin", "credentials", "list", "--domain", domain
+    )
+    assert [r["id"] for r in _json.loads(result.stdout)] == ["g"]
+
+
+def test_credentials_list_filters_by_store(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["root-cred"]))
+    jenkins.get(api("job/team/credentials"), json=_cred_payload("folder", _=["t"]))
+    result = _invoke(
+        "--format",
+        "json",
+        "plugin",
+        "credentials",
+        "list",
+        "--folder",
+        "team",
+        "--store",
+        "folder",
+    )
+    assert [r["id"] for r in _json.loads(result.stdout)] == ["t"]
+
+
+def test_credentials_list_folder_includes_inherited_nearest_first(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["root-cred"]))
+    jenkins.get(api("job/team/credentials"), json=_cred_payload("folder", _=["t"]))
+    jenkins.get(
+        api("job/team/job/app/credentials"), json=_cred_payload("folder", _=["a"])
+    )
+    result = _invoke(
+        "--format", "json", "plugin", "credentials", "list", "--folder", "team/app"
+    )
+    assert result.exit_code == 0
+    records = _json.loads(result.stdout)
+    assert [(r["id"], r["folder"]) for r in records] == [
+        ("a", "team/app"),
+        ("t", "team"),
+        ("root-cred", ""),
+    ]
+
+
+def test_credentials_list_unknown_folder_exits_1(jenkins):
+    jenkins.get(api("credentials"), json={"stores": {}})
+    jenkins.get(api("job/nope/credentials"), status_code=404)
+    result = _cred_invoke("list", "--folder", "nope")
+    assert result.exit_code == 1
+    assert "I find no folder 'nope' on this Jenkins, sir." in result.stderr
+    assert result.stdout == ""
+
+
+def test_credentials_list_plugin_missing_exits_1(jenkins):
+    jenkins.get(api("credentials"), status_code=404)
+    result = _cred_invoke("list")
+    assert result.exit_code == 1
+    assert "Credentials plugin does not appear to be installed" in result.stderr
+
+
+def test_credentials_list_403_uses_generic_butler_error(jenkins):
+    jenkins.get(api("credentials"), status_code=403)
+    result = _cred_invoke("list")
+    assert result.exit_code == 1
+    assert "A 403" in result.stderr
+
+
+def test_credentials_show_includes_description(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["gh-token", "other"]))
+    result = _cred_invoke("show", "gh-token")
+    assert result.exit_code == 0
+    assert "gh-token notes" in result.stdout
+    assert "other" not in result.stdout
+    assert "Credential 'gh-token'." in result.stderr
+
+
+def test_credentials_show_lists_every_shadowing_copy(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["deploy"]))
+    jenkins.get(api("job/team/credentials"), json=_cred_payload("folder", _=["deploy"]))
+    result = _invoke(
+        "--format",
+        "json",
+        "plugin",
+        "credentials",
+        "show",
+        "deploy",
+        "--folder",
+        "team",
+    )
+    assert [r["folder"] for r in _json.loads(result.stdout)] == ["team", ""]
+
+
+def test_credentials_show_unknown_exits_1(jenkins):
+    jenkins.get(api("credentials"), json=_cred_payload(_=["a"]))
+    result = _cred_invoke("show", "nope")
+    assert result.exit_code == 1
+    assert "I find no credential by the id 'nope'" in result.stderr
+    assert result.stdout == ""
+
+
+def test_credentials_never_requests_anything_but_api_json(jenkins):
+    """Every request is a read of an /api/json export; nothing else is asked."""
+    jenkins.get(api("credentials"), json=_cred_payload(_=["a"]))
+    _cred_invoke("show", "a")
+    assert jenkins.request_history
+    for request in jenkins.request_history:
+        assert request.method == "GET"
+        assert request.path.endswith("/api/json")

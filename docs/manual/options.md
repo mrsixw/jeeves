@@ -134,7 +134,8 @@ colour off is enough; none of them can switch it back on.
 ### `--format`
 
 Choose how table commands (`job list`, `node list`, `queue`,
-`plugin lockable-resources list`, `plugin lockable-resources show`) render their
+`plugin lockable-resources list`, `plugin lockable-resources show`,
+`plugin credentials list`, `plugin credentials show`) render their
 results.
 Decorative butler headers always go to stderr, so structured output on stdout
 stays clean and pipe-friendly.
@@ -165,6 +166,7 @@ decorative emoji. The JSON keys per command:
 - **node list**: `name`, `status`, `executors`, `labels`, `url` (with `--stats`, adds `disk`, `temp`, `swap`, `response_ms`, `clock_ms`, `architecture` — raw bytes/ms; with `--address`, adds `address` — the agent's launcher host/IP, or `null` when unavailable)
 - **queue**: `name`, `reason`, `stuck`, `url`
 - **plugin lockable-resources list** / **show**: `name`, `description`, `note`, `labels`, `state` (`free`, `reserved` or `locked`), `reserved_by`, `reserved_by_email`, `reserved_at` (raw — epoch millis or an ISO string, depending on the plugin version), `lock_reason`, `lock_cause`, `build_name`, `ephemeral`, `stolen`, `url`
+- **plugin credentials list** / **show**: `id`, `name`, `type`, `description`, `store` (e.g. `system`, `folder`), `domain` (display name, `Global` for the global domain), `folder` (the folder holding it, `""` for the root), `url` — never any secret material
 
 ### `--template`
 

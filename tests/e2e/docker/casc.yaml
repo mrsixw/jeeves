@@ -99,3 +99,33 @@ unclassified:
       - name: "e2e-lock-held"
         description: "Locked by a running build, not by a reservation."
         labels: "e2e-held"
+
+# Credentials, for `jeeves plugin credentials`. Instance config like the
+# lockable resources: the system store lives in global configuration.
+#
+# The "secrets" are fixed, public and inert — nothing accepts them. They exist
+# so the scenarios can assert their values never reach jeeves' output, which
+# is the property this command most needs to keep. `string` comes from
+# plain-credentials and `usernamePassword` from credentials, both already in
+# plugins.txt; JCasC rejects either section without its plugin.
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "e2e-secret-text"
+              description: "A secret text in the global domain."
+              secret: "e2e-not-really-a-secret"
+      # A named domain, so `--domain` has something to tell apart from the
+      # global one.
+      - domain:
+          name: "e2e-domain"
+          description: "A domain of its own."
+        credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "e2e-domain-login"
+              description: "A login in the e2e-domain domain."
+              username: "e2e-user"
+              password: "e2e-not-really-a-password"
