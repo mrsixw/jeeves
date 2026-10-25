@@ -32,6 +32,7 @@ from .config import (
     write_default_config,
 )
 from .jenkins import JenkinsClient, JenkinsError, normalize_jenkins_path
+from .junit import JUnitError, TestReport, case_records, summarise
 from .lockable import LockableError, LockableResources, resource_records
 from .logger import configure as configure_logging
 from .render import Column
@@ -585,6 +586,11 @@ def plugin_group() -> None:
 @plugin_group.group("lockable-resources")
 def lockable_group() -> None:
     """Manage Lockable Resources (requires the lockable-resources plugin)."""
+
+
+@plugin_group.group("junit")
+def junit_group() -> None:
+    """Read a build's JUnit test results (requires the junit plugin)."""
 
 
 # ── profile management ───────────────────────────────────────────────────────
@@ -2675,6 +2681,127 @@ def lockable_reset(ctx: _Ctx, name: str) -> None:
         _lockable_say(ctx, f"🧹 '{name}' was already in good order.")
     else:
         _lockable_say(ctx, f"🧹 '{name}' has been restored to good order.")
+
+
+# ── junit test results ───────────────────────────────────────────────────────
+
+_JUNIT_STATUS_CELLS = {
+    "PASSED": ("✅ PASSED", "green"),
+    "FIXED": ("🩹 FIXED", "green"),
+    "SKIPPED": ("⏭️ SKIPPED", "yellow"),
+    "FAILED": ("❌ FAILED", "red"),
+    "REGRESSION": ("💥 REGRESSION", "red"),
+}
+
+
+def _junit_error_text(exc: JUnitError, job: str, number: int | None) -> str:
+    """The butler's wording for a named test-report failure.
+
+    ``_butler_fail`` supplies the 🎩, so none of these carry an emoji.
+    """
+    build = f"Build #{number} of '{job}'" if number else f"'{job}'"
+    if exc.reason == "no-build":
+        return f"I find no build '{exc.detail}' of '{job}', sir."
+    if exc.reason == "no-tests":
+        return f"{build} published no test results, sir."
+    if exc.reason == "plugin-missing":
+        return (
+            "The JUnit plugin does not appear to be installed on this Jenkins, "
+            "sir. Without it there are no test results for me to read."
+        )
+    return (
+        f"{build} has no test results I can find, sir. Either none were "
+        "published, or the JUnit plugin is not installed — I am not permitted "
+        "to ask Jenkins which."
+    )
+
+
+def _junit_case_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    return _format_duration(int(seconds * 1000))
+
+
+def _junit_columns(ctx: _Ctx, *, matrix: bool) -> list[Column]:
+    def status_table(r: dict, _i: int) -> str:
+        label, fg = _JUNIT_STATUS_CELLS.get(r["status"], (r["status"], None))
+        if not ctx.colour:
+            return r["status"]
+        return click.style(label, fg=fg, bold=True)
+
+    def age_table(r: dict, _i: int) -> str:
+        if not r["failing"]:
+            return "—"
+        return "1 build" if r["age"] == 1 else f"{r['age']} builds"
+
+    columns = []
+    if matrix:
+        columns.append(Column("configuration", "Configuration"))
+    columns += [
+        Column("class_name", "Class", table=lambda r, _i: r["class_name"] or "—"),
+        Column("name", "Test"),
+        Column("status", "Status", table=status_table),
+        Column(
+            "duration",
+            "Duration",
+            table=lambda r, _i: _junit_case_duration(r["duration"]),
+        ),
+        Column("age", "Failing for", table=age_table),
+        Column(
+            "error",
+            "Detail",
+            # One line in a table cell; the full text is in structured formats.
+            table=lambda r, _i: (r["error"].strip().splitlines() or ["—"])[0],
+        ),
+    ]
+    return columns
+
+
+@junit_group.command("report")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@click.option(
+    "--failed",
+    "failed_only",
+    is_flag=True,
+    default=False,
+    help="Only failing tests (FAILED and REGRESSION).",
+)
+@click.option("--suite", default=None, metavar="NAME", help="Only tests in this suite.")
+@pass_ctx
+def junit_report(
+    ctx: _Ctx, job: str, build_id: str, failed_only: bool, suite: str | None
+) -> None:
+    """Show a build's test results: totals, then one row per test.
+
+    JOB is the job path (folders as folder/job); BUILD defaults to lastBuild.
+    """
+    report = TestReport(_make_client(ctx), job, build_id)
+    try:
+        raw = report.fetch()
+    except JUnitError as exc:
+        _butler_fail(_junit_error_text(exc, job, report.number), ctx.colour)
+    except JenkinsError as exc:
+        butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+    totals = summarise(raw)
+    records = case_records(raw, failed_only=failed_only, suite=suite)
+    verdict = (
+        f"{totals['passed']} passed, {totals['failed']} failed, "
+        f"{totals['skipped']} skipped in "
+        f"{_junit_case_duration(totals['duration'])}"
+    )
+    if failed_only and not totals["failed"]:
+        empty = f"🎉 {verdict}. Not a single failure — a clean bill of health."
+    else:
+        empty = f"🧪 {verdict}. No tests match, I'm afraid."
+    _emit(
+        ctx,
+        records,
+        _junit_columns(ctx, matrix=bool(raw.get("childReports"))),
+        header=f"🧪 Build #{report.number} of '{job}': {verdict}.",
+        empty=empty,
+    )
 
 
 # ── whoami ───────────────────────────────────────────────────────────────────

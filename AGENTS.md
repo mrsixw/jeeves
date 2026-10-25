@@ -68,6 +68,19 @@ forwarding to the previous page — so the status code is the only meaningful pa
 - Out of scope: `/lockable-resources/remote/v1/`, a heartbeat-driven lock-holding REST protocol
   for long-lived external clients.
 
+### JUnit plugin
+Not base Jenkins — `junit`, handled in `src/jeeves/junit.py`.
+- `GET /job/x/N/testReport/api/json` — `TestResult`: `passCount`, `failCount`, `skipCount`,
+  `duration` (seconds, float), `suites[name,cases[className,name,status,duration,age,errorDetails]]`.
+  **Always pass a `tree`**: cases export `stdout`/`stderr`, which can be megabytes each.
+- Case `status` is the plugin's enum: `PASSED`, `SKIPPED`, `FAILED`, `FIXED`, `REGRESSION`. The
+  failing ones are `FAILED` and `REGRESSION`; `age` is builds failing in a row.
+- Multi-configuration builds expose an `AggregatedTestResultAction` at the same URL instead:
+  `childReports[child[fullDisplayName,url],result[…same fields…]]`. Ask for both in one `tree`.
+- **A 404 on `testReport` is ambiguous**: no results published, or plugin absent. Only
+  `GET /pluginManager/api/json?tree=plugins[shortName,active]` settles it, and that needs
+  Overall/SystemRead — so ask it on the error path only, and report "undetermined" on a 403.
+
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
 - **Every** Jeeves-voiced message — success, info, empty state, and error — leads with a single emoji followed by **one** space (never a double space).
