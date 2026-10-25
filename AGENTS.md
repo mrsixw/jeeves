@@ -68,6 +68,23 @@ forwarding to the previous page — so the status code is the only meaningful pa
 - Out of scope: `/lockable-resources/remote/v1/`, a heartbeat-driven lock-holding REST protocol
   for long-lived external clients.
 
+### Credentials plugin
+Not base Jenkins, though near-universal — `credentials`, handled in `src/jeeves/credentials.py`.
+**Metadata only: never fetch, render or log secret material.**
+- `GET /credentials/api/json` (root) and `GET /job/f/credentials/api/json` (any folder) —
+  `ViewCredentialsAction`. Query with
+  `tree=stores[domains[urlName,displayName,credentials[id,displayName,typeName,description]]]`.
+- `stores` and `domains` are **maps**, keyed by url name: stores `system` (root) and `folder`
+  (a folder's own); domains `_` for the global one (displayed `Global`). Stapler hands each map
+  value the same `tree` subtree, so one query reaches through both.
+- `credentials` is `@Exported(visibility = 1)`, so it is absent without an explicit `tree`.
+- **A context exports only its own stores** (`context == store.getContext()`), never inherited
+  ones. "What can folder `a/b` see" means reading `a/b`, `a`, then the root, nearest first.
+- A 404 at the root means the plugin is absent; a 404 at a folder (root fine) means no folder.
+- Per-credential page: `…/credentials/store/{store}/domain/{domain}/credential/{id}/`.
+- `POST …/domain/{d}/createCredentials` takes the credential as XStream XML (the e2e fixture
+  uses it to seed a folder store); 409 if the id exists. jeeves itself never writes.
+
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
 - **Every** Jeeves-voiced message — success, info, empty state, and error — leads with a single emoji followed by **one** space (never a double space).

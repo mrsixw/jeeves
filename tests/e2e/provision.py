@@ -195,3 +195,29 @@ def create_job(
         raise ProvisionError(
             f"creating job {name!r} failed: {resp.status_code} {resp.text[:300]}"
         )
+
+
+def create_folder_credential(
+    base_url: str, *, token: str, folder: str, credential_xml: str
+) -> None:
+    """Add a credential to a folder's own store, in its global domain.
+
+    Folder stores live in the folder's config rather than in global
+    configuration, so Configuration-as-Code cannot reach them without job-dsl.
+    The plugin's ``createCredentials`` endpoint takes the credential as XML,
+    the same shape it persists. The URL is built by hand for the reason given
+    in ``create_job``.
+    """
+    session = _crumbed_session((ADMIN_USER, token), base_url)
+    resp = session.post(
+        f"{base_url}/job/{folder}/credentials/store/folder/domain/_/createCredentials",
+        data=credential_xml.encode("utf-8"),
+        headers={"Content-Type": "application/xml; charset=utf-8"},
+        timeout=30,
+    )
+    # 409 means it already exists, which is fine for a reused container.
+    if resp.status_code not in (200, 409):
+        raise ProvisionError(
+            f"creating a credential in {folder!r} failed: "
+            f"{resp.status_code} {resp.text[:300]}"
+        )

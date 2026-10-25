@@ -225,3 +225,33 @@ def _build_holds(jenkins_container, name):
         f"{name!r} was never locked within 120s. The holder build may have "
         f"failed; the plugin reports {_resources(jenkins_container).get(name)}"
     )
+
+
+@then("the credentials fixture inventory is as documented")
+def _credentials_inventory(jenkins_container):
+    """Guard the credential ids the credentials feature file spells literally.
+
+    Asks Jenkins rather than comparing the fixture's attributes to literals,
+    for the reason given in the lockable inventory: two of these are declared
+    in casc.yaml, so the fixture's names are only a second copy.
+    """
+
+    def ids(path):
+        resp = requests.get(
+            f"{jenkins_container.base_url}/{path}/api/json",
+            params={"tree": "credentials[id]"},
+            auth=(jenkins_container.user, jenkins_container.token),
+            timeout=15,
+        )
+        assert resp.status_code == 200, f"{path} said {resp.status_code}"
+        return {c["id"] for c in resp.json().get("credentials", [])}
+
+    system = "credentials/store/system/domain"
+    assert ids(f"{system}/_") == {jenkins_container.secret_text_credential}
+    assert ids(f"{system}/e2e-domain") == {jenkins_container.domain_credential}
+    assert ids(f"job/{jenkins_container.folder}/credentials/store/folder/domain/_") == {
+        jenkins_container.folder_credential
+    }
+    assert jenkins_container.secret_text_credential == "e2e-secret-text"
+    assert jenkins_container.domain_credential == "e2e-domain-login"
+    assert jenkins_container.folder_credential == "e2e-folder-secret"
