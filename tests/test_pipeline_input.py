@@ -12,7 +12,8 @@ from jeeves.pipeline_input import InputError, PipelineInput, input_records
 BASE = "http://jenkins.example.com"
 BUILD = f"{BASE}/job/deploy/42"
 RESOLVE = f"{BASE}/job/deploy/lastBuild/api/json"
-INPUTS = f"{BUILD}/input/api/json"
+_INPUT_ACTION = "org.jenkinsci.plugins.workflow.support.steps.input.InputAction"
+INPUTS = f"{BUILD}/api/json"
 
 
 @pytest.fixture
@@ -44,9 +45,17 @@ def _resolve(m: req_mock.Mocker, number: int = 42) -> None:
     m.get(RESOLVE, json={"number": number, "url": f"{BASE}/job/deploy/{number}/"})
 
 
+def _actions(executions: list[dict] | None) -> dict:
+    """A build payload whose actions carry an InputAction, or none at all."""
+    actions: list[dict] = [{"_class": "hudson.model.CauseAction"}, {}]
+    if executions is not None:
+        actions.append({"_class": _INPUT_ACTION, "executions": executions})
+    return {"actions": actions}
+
+
 def _pending(m: req_mock.Mocker, *responses: list[dict]) -> None:
     """Register successive pending lists: before the POST, then after it."""
-    m.get(INPUTS, [{"json": {"executions": r}} for r in responses])
+    m.get(INPUTS, [{"json": _actions(r)} for r in responses])
 
 
 def _string(name: str, default: str | None = "x") -> dict:
@@ -144,7 +153,7 @@ def test_pending_asks_for_an_explicit_tree(inputs) -> None:
         _pending(m, [])
         inputs.pending()
         tree = m.last_request.qs["tree"][0]
-    assert tree.startswith("executions[id,settled,input[")
+    assert tree.startswith("actions[executions[id,settled,input[")
 
 
 def test_pending_drops_settled_executions(inputs) -> None:
@@ -156,11 +165,26 @@ def test_pending_drops_settled_executions(inputs) -> None:
         assert [e["id"] for e in inputs.pending()] == ["Open"]
 
 
-def test_pending_404_means_nothing_was_ever_asked(inputs) -> None:
+def test_pending_reads_the_build_actions_not_the_input_url(inputs) -> None:
+    """InputAction has no getApi(): /input/api/json is getDynamic("api"), a 404.
+
+    The real plugin settled this — the first e2e run saw every paused build
+    reported as awaiting nothing. Its executions are exported on the build.
+    """
+    with req_mock.Mocker() as m:
+        _resolve(m)
+        _pending(m, [_execution()])
+        inputs.pending()
+        urls = [r.url for r in m.request_history]
+    assert not any("/input/" in u for u in urls)
+    assert urls[-1].startswith(INPUTS)
+
+
+def test_pending_without_an_input_action_means_nothing_was_asked(inputs) -> None:
     """No input step has run, or the plugin is absent: either way, nothing."""
     with req_mock.Mocker() as m:
         _resolve(m)
-        m.get(INPUTS, status_code=404)
+        _pending(m, None)
         assert inputs.pending() == []
 
 
@@ -183,15 +207,17 @@ def test_pending_propagates_a_forbidden_read(inputs) -> None:
 
 def test_explicit_build_number_is_used_as_given(client) -> None:
     with req_mock.Mocker() as m:
-        m.get(f"{BASE}/job/deploy/7/api/json", json={"number": 7, "url": ""})
-        m.get(f"{BASE}/job/deploy/7/input/api/json", json={"executions": []})
+        m.get(
+            f"{BASE}/job/deploy/7/api/json",
+            json={"number": 7, "url": "", **_actions([])},
+        )
         assert PipelineInput(client, "deploy", 7).pending() == []
 
 
 def test_nested_job_paths_are_encoded(client) -> None:
     with req_mock.Mocker() as m:
         m.get(f"{BASE}/job/team/job/app/lastBuild/api/json", json={"number": 3})
-        m.get(f"{BASE}/job/team/job/app/3/input/api/json", json={"executions": []})
+        m.get(f"{BASE}/job/team/job/app/3/api/json", json=_actions([]))
         assert PipelineInput(client, "team/app").pending() == []
 
 

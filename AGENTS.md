@@ -72,9 +72,14 @@ forwarding to the previous page — so the status code is the only meaningful pa
 Not base Jenkins — `pipeline-input-step`, handled in `src/jeeves/pipeline_input.py`. A build gains
 an `InputAction` at `/job/x/N/input/` the first time it reaches an `input` step; each pending
 step hangs beneath it by its id (`InputAction.getDynamic`).
-- `GET /job/x/N/input/api/json?tree=executions[id,settled,input[...]]` — pending steps. Always
-  pass an explicit `tree`; `InputStepExecution` is `@ExportedBean(defaultVisibility = 2)`.
-  **A 404 means nothing was ever asked** (or the plugin is absent) — both read as "nothing pending".
+- **There is no `/job/x/N/input/api/json`.** `InputAction` has no `getApi()`, so Stapler hands
+  `api` to `getDynamic` as an input id and answers 404 — paused or not. Read pending steps from
+  the build instead: `GET /job/x/N/api/json?tree=actions[executions[id,settled,input[...]]]`,
+  taking `executions` from whichever action carries it. The first e2e run caught this; every
+  mocked test had assumed the URL.
+- Always pass an explicit `tree`; `InputStepExecution` is `@ExportedBean(defaultVisibility = 2)`.
+  No action carrying `executions` means nothing was ever asked (or the plugin is absent) — both
+  read as "nothing pending".
 - `POST …/input/{id}/proceedEmpty` — approve an input that declares no parameters
 - `POST …/input/{id}/proceed` — form field `json` = `{"parameter":[{"name":…,"value":…}]}`.
   **Use this whenever the input declares parameters**, filling unset ones from

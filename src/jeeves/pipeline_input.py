@@ -4,11 +4,16 @@ Not part of base Jenkins: the ``pipeline-input-step`` plugin attaches an
 ``InputAction`` at ``/job/x/N/input/`` the first time a build reaches an
 ``input`` step, and each pending step is reachable beneath it by its id.
 
-Three upstream quirks shape the design:
+Four upstream quirks shape the design:
 
-- ``/input/`` only exists once an ``input`` step has run, so a 404 there means
-  "nothing has ever been asked" — and also "plugin absent". Both truthfully
-  mean nothing awaits a decision, so they are not told apart.
+- **There is no ``/input/api/json``.** ``InputAction`` has no ``getApi()``, so
+  Stapler hands ``api`` to ``getDynamic`` as an input id and answers 404. The
+  pending steps are read from the build's own ``actions[]`` export instead,
+  where ``InputAction`` appears as an exported bean. The first end-to-end run
+  against the real plugin caught this; every mocked test had assumed the URL.
+- A build only gains an ``InputAction`` once it reaches an ``input`` step, so
+  none among its actions means "nothing has ever been asked" — and also
+  "plugin absent". Both truthfully mean nothing awaits a decision.
 - ``proceed`` and ``abort`` refuse with ``hudson.model.Failure`` ("already
   given", "You need to be X"), whose status code is not a stable contract.
   Every verb therefore reads the pending list before posting and re-reads it
@@ -34,8 +39,8 @@ __all__ = ["InputError", "PipelineInput", "input_records"]
 # because InputStepExecution's default export visibility would otherwise
 # decide the payload's shape for us.
 _TREE = (
-    "executions[id,settled,input[id,message,ok,cancel,submitter,"
-    "parameters[name,type,description,choices,defaultParameterValue[value]]]]"
+    "actions[executions[id,settled,input[id,message,ok,cancel,submitter,"
+    "parameters[name,type,description,choices,defaultParameterValue[value]]]]]"
 )
 
 # Codes a refused settlement may answer with. Failure's status has varied
@@ -150,15 +155,13 @@ class PipelineInput:
 
     def pending(self) -> list[dict]:
         """Every input step in this build still awaiting a decision."""
-        try:
-            payload = self._client.get_json(
-                f"{self._build_path()}/input", params={"tree": _TREE}
-            )
-        except JenkinsHTTPError as exc:
-            if exc.status == 404:
-                return []
-            raise
-        return [e for e in payload.get("executions") or [] if not e.get("settled")]
+        payload = self._client.get_json(self._build_path(), params={"tree": _TREE})
+        executions = [
+            e
+            for action in payload.get("actions") or []
+            for e in (action or {}).get("executions") or []
+        ]
+        return [e for e in executions if not e.get("settled")]
 
     # ── deciding ─────────────────────────────────────────────────────────────
 

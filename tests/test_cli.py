@@ -3116,8 +3116,8 @@ def _input_http(jenkins, *pending_lists):
         json={"number": 42, "url": f"{JENKINS_URL}/{_INPUT_BUILD}/"},
     )
     jenkins.get(
-        api(f"{_INPUT_BUILD}/input"),
-        [{"json": {"executions": p}} for p in pending_lists],
+        api(_INPUT_BUILD),
+        [{"json": {"actions": [{}, {"executions": p}]}} for p in pending_lists],
     )
     jenkins.get(url("crumbIssuer/api/json"), status_code=404)
 
@@ -3190,7 +3190,7 @@ def test_input_list_empty_state_on_stderr(jenkins):
 def test_input_list_with_no_input_action_is_empty(jenkins):
     """A build that never reached an input step has no /input/ at all."""
     jenkins.get(api("job/deploy/lastBuild"), json={"number": 42, "url": ""})
-    jenkins.get(api(f"{_INPUT_BUILD}/input"), status_code=404)
+    jenkins.get(api(_INPUT_BUILD), json={"actions": [{}, {"_class": "x.CauseAction"}]})
     result = _input_invoke("list", "deploy")
     assert result.exit_code == 0
     assert "awaits no one's word" in result.stderr
@@ -3345,13 +3345,11 @@ def test_input_reject_nothing_pending_exits_0(jenkins):
 
 
 def test_input_reject_explicit_build_number(jenkins):
-    jenkins.get(api("job/deploy/7"), json={"number": 7, "url": ""})
+    paused = {"number": 7, "url": "", "actions": [{"executions": [_input_execution()]}]}
+    settled = {"number": 7, "url": "", "actions": [{"executions": []}]}
+    # One path serves the resolve, the read and the confirming re-read.
     jenkins.get(
-        api("job/deploy/7/input"),
-        [
-            {"json": {"executions": [_input_execution()]}},
-            {"json": {"executions": []}},
-        ],
+        api("job/deploy/7"), [{"json": paused}, {"json": paused}, {"json": settled}]
     )
     jenkins.get(url("crumbIssuer/api/json"), status_code=404)
     jenkins.post(url("job/deploy/7/input/Ship/abort"), status_code=200)

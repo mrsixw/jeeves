@@ -247,16 +247,27 @@ def _last_build(jenkins_container, job):
 
 
 def _pending_inputs(jenkins_container, job, number):
-    """The plugin's own view of a build's pending inputs, not jeeves'."""
+    """The plugin's own view of a build's pending inputs, not jeeves'.
+
+    Read from the build's ``actions[]``: ``InputAction`` has no ``getApi()``, so
+    ``/input/api/json`` is a 404 on every build, paused or not. This helper
+    once asked there, and the first run against the real plugin timed out on
+    every scenario as a result.
+    """
     resp = _get(
         jenkins_container,
-        f"job/{job}/{number}/input/api/json",
-        tree="executions[id,settled]",
+        f"job/{job}/{number}/api/json",
+        tree="actions[executions[id,settled]]",
     )
     if resp.status_code == 404:
         return []
-    assert resp.status_code == 200, f"input action said {resp.status_code}"
-    return [e for e in resp.json().get("executions", []) if not e.get("settled")]
+    assert resp.status_code == 200, f"build #{number} said {resp.status_code}"
+    executions = [
+        e
+        for action in resp.json().get("actions") or []
+        for e in (action or {}).get("executions") or []
+    ]
+    return [e for e in executions if not e.get("settled")]
 
 
 @given(parsers.parse('a build of "{job}" is paused at an input'))
@@ -283,7 +294,16 @@ def _paused_at_input(jenkins_container, job):
         if build.status_code == 200 and _pending_inputs(jenkins_container, job, number):
             return
         time.sleep(1)
-    pytest.fail(f"build #{number} of {job!r} never paused at an input within 120s")
+    # Say why: a build that died before its input step looks exactly like one
+    # that paused where we could not see it, unless its console is shown.
+    detail = _get(jenkins_container, f"job/{job}/{number}/api/json", tree="result")
+    console = _get(jenkins_container, f"job/{job}/{number}/consoleText")
+    result = detail.json().get("result") if detail.ok else detail.status_code
+    tail = console.text[-1500:] if console.ok else console.status_code
+    pytest.fail(
+        f"build #{number} of {job!r} never paused at an input within 120s; "
+        f"result={result}\n--- console ---\n{tail}"
+    )
 
 
 @then(parsers.parse('the last build of "{job}" finishes with result "{result}"'))

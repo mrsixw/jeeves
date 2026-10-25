@@ -328,8 +328,10 @@ Why each exists:
   The scenario polls for the lock rather than sleeping a guessed interval,
   because the queue has to assign an executor first and that is not instant
   on a loaded runner.
-- **An input waiter** because `/input/` does not exist until a build reaches
-  an `input` step. Its one parameter has a default and the pipeline echoes
+- **An input waiter** because a build has no `InputAction` until it reaches
+  an `input` step. (Pending steps are read from the build's `actions[]`, not
+  from `/input/api/json`, which does not exist — the first run here caught
+  jeeves and this suite's own helper both assuming it did.) Its one parameter has a default and the pipeline echoes
   the value it received, so the console proves what Jenkins actually parsed
   from the `json` form body — including that an approval with no `--param`
   delivers the default rather than `null`. It runs on `agent none`, because a
