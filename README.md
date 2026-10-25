@@ -28,6 +28,7 @@ Commands are grouped to mirror Jenkins' own hierarchy: server-level commands at 
 | `jeeves build rebuild JOB [--param K=V]` | Re-run a build with its previous parameters |
 | `jeeves node list [--stats]` | List build nodes (agents); `--stats` adds health metrics |
 | `jeeves plugin lockable-resources <verb>` | Read and manage lockable resources (requires the `lockable-resources` plugin) |
+| `jeeves plugin junit report JOB [BUILD] [--failed]` | Show a build's test results (requires the `junit` plugin) |
 
 ### Deprecated spellings
 

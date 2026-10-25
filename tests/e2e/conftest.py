@@ -155,6 +155,7 @@ class JenkinsFixture:
     folder: str
     nested_job: str
     lock_holder_job: str
+    test_reporter_job: str
 
     # Declared in casc.yaml rather than created here, because the plugin keeps
     # them in global configuration: they are part of the image's shape, not
@@ -260,6 +261,15 @@ def jenkins_container(container_runtime):
             config_xml=(DOCKER_DIR / "jobs" / "lock_holder.xml").read_text(),
         )
 
+        # Publishes a JUnit report with a known split, for the junit plugin.
+        test_reporter = "e2e-test-reporter"
+        create_job(
+            base_url,
+            token=token,
+            name=test_reporter,
+            config_xml=(DOCKER_DIR / "jobs" / "test_reporter.xml").read_text(),
+        )
+
         # A folder with a job inside it, so a scenario can prove
         # normalize_jenkins_path's /job/<folder>/job/<name> encoding against a
         # real Jenkins. A mock would accept whatever shape we invented.
@@ -287,6 +297,7 @@ def jenkins_container(container_runtime):
             folder=folder,
             nested_job="nested",
             lock_holder_job=lock_holder,
+            test_reporter_job=test_reporter,
         )
     except NotReachable as exc:
         # Must precede the ProvisionError branch — NotReachable subclasses it.

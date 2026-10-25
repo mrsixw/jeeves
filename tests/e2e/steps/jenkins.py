@@ -66,6 +66,7 @@ def _inventory(jenkins_container):
     assert jenkins_container.folder == "e2e-folder"
     assert jenkins_container.nested_job == "nested"
     assert jenkins_container.nested_path == "e2e-folder/nested"
+    assert jenkins_container.test_reporter_job == "e2e-test-reporter"
 
 
 @then(parsers.parse('the Jenkins job "{job}" has at least {count:d} build'))
@@ -225,3 +226,47 @@ def _build_holds(jenkins_container, name):
         f"{name!r} was never locked within 120s. The holder build may have "
         f"failed; the plugin reports {_resources(jenkins_container).get(name)}"
     )
+
+
+@given(parsers.parse('the job "{job}" has a completed build'))
+def _has_completed_build(jenkins_container, job):
+    """Ensure the job has finished at least once, triggering it if not.
+
+    Session-scoped like the container, in effect: the first scenario to ask
+    pays for the build, later ones find ``lastCompletedBuild`` already there.
+    """
+    auth = (jenkins_container.user, jenkins_container.token)
+    base = jenkins_container.base_url
+
+    def completed():
+        resp = requests.get(
+            f"{base}/job/{job}/lastCompletedBuild/api/json",
+            params={"tree": "number"},
+            auth=auth,
+            timeout=15,
+        )
+        return resp.status_code == 200
+
+    if completed():
+        return
+    resp = requests.post(f"{base}/job/{job}/build", auth=auth, timeout=30)
+    if resp.status_code == 400:
+        # A parameterised job refuses /build; /buildWithParameters runs it
+        # with its declared defaults. The first run met this on e2e-pipeline.
+        resp = requests.post(
+            f"{base}/job/{job}/buildWithParameters", auth=auth, timeout=30
+        )
+    assert resp.status_code in (200, 201), f"trigger said {resp.status_code}"
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        if completed():
+            return
+        time.sleep(1)
+    pytest.fail(f"{job!r} produced no completed build within 120s")
+
+
+@then(parsers.parse("the JSON payload has exactly {count:d} record"))
+@then(parsers.parse("the JSON payload has exactly {count:d} records"))
+def _payload_count(payload, count):
+    assert isinstance(payload, list), f"expected an array, got {type(payload)}"
+    assert len(payload) == count, f"expected {count} record(s), got {payload}"

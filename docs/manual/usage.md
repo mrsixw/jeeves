@@ -107,6 +107,38 @@ Reserving, releasing and creating each need their own Jenkins permission
 (`RESERVE`, `UNLOCK` and `CONFIGURE` respectively), and releasing a reservation
 is restricted to its holder or an administrator.
 
+## Test results
+
+After a red build, the first question is "which tests failed?". The
+[`junit`](https://plugins.jenkins.io/junit/) plugin records the answer, and
+`plugin junit report` reads it back. `BUILD` defaults to `lastBuild`.
+
+```bash
+jeeves plugin junit report api                 # totals, then every test
+jeeves plugin junit report api --failed        # just FAILED and REGRESSION
+jeeves plugin junit report api 41 --suite app.AuthTest
+jeeves --format json plugin junit report api --failed | jq -r '.[].error'
+```
+
+The totals go to stderr and the rows to stdout, so `--failed` piped into
+another tool sees only the failures. "Failing for" counts how many builds in a
+row a test has been failing. The table shows the first line of each failure's
+detail; structured formats keep the whole of it. Multi-configuration (matrix)
+builds gain a Configuration column.
+
+```console
+$ jeeves plugin junit report api --failed
+🧪 Build #42 of 'api': 312 passed, 2 failed, 4 skipped in 1m42s.
+Class                    Test                Status       Duration  Failing for  Detail
+app.AuthTest             test_token_refresh  REGRESSION   0.42s     1 build      expected 200, got 401
+app.billing.InvoiceTest  test_vat_rounding   FAILED       0.03s     6 builds     0.1 != 0.10000001
+```
+
+A build with no report is an error, and jeeves says which kind where it can:
+no results were published, or the plugin is not installed. Telling those
+apart means asking the plugin manager, which needs Overall/SystemRead; without
+it, the message says both are possible.
+
 ## Config file
 
 ```bash

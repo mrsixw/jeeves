@@ -302,8 +302,8 @@ Two JCasC traps, both found by booting it rather than by reading docs:
 
 ### The seed jobs
 
-`e2e-freestyle`, `e2e-pipeline`, `e2e-lock-holder`, and `nested` inside
-`e2e-folder`. The names
+`e2e-freestyle`, `e2e-pipeline`, `e2e-lock-holder`, `e2e-test-reporter`, and
+`nested` inside `e2e-folder`. The names
 are fixed and spelled literally in the feature files, because interpolating
 them would need placeholder syntax that collides with Gherkin's own `<...>`
 outline parameters. The **fixture inventory** scenario asserts every one of
@@ -328,6 +328,12 @@ Why each exists:
   The scenario polls for the lock rather than sleeping a guessed interval,
   because the queue has to assign an executor first and that is not instant
   on a loaded runner.
+- **A test reporter** because a `testReport` only exists once a build has run
+  the `junit` step. It writes a JUnit XML inline — two passed, one failed, one
+  skipped — so the scenarios assert exact counts against what the real plugin
+  parsed, without needing a test runner in the image. The failing case's
+  message is a marker string, so the scenario can prove `errorDetails` is what
+  arrives.
 
 ### The lockable resources
 

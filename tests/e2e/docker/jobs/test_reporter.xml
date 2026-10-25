@@ -1,0 +1,38 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  A pipeline that publishes a JUnit report with a known split — two passed,
+  one failed, one skipped — so `jeeves plugin junit report` has exact numbers
+  to be asserted against.
+
+  The XML is written inline rather than produced by a real test runner, so the
+  fixture needs no toolchain. The `junit` step then marks the build UNSTABLE,
+  which is what a failing test does in real life.
+-->
+<flow-definition plugin="workflow-job">
+  <description>jeeves end-to-end fixture: publishes a JUnit report</description>
+  <keepDependencies>false</keepDependencies>
+  <properties/>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>pipeline {
+    agent any
+    stages {
+        stage('Test') {
+            steps {
+                writeFile file: 'results.xml', text: '''&lt;testsuite name="e2e.Suite" tests="4" failures="1" skipped="1"&gt;
+  &lt;testcase classname="e2e.Suite" name="test_passes" time="0.1"/&gt;
+  &lt;testcase classname="e2e.Suite" name="test_also_passes" time="0.2"/&gt;
+  &lt;testcase classname="e2e.Suite" name="test_fails" time="0.3"&gt;
+    &lt;failure message="e2e-expected-failure"&gt;e2e-expected-failure&lt;/failure&gt;
+  &lt;/testcase&gt;
+  &lt;testcase classname="e2e.Suite" name="test_skipped"&gt;&lt;skipped/&gt;&lt;/testcase&gt;
+&lt;/testsuite&gt;'''
+                junit 'results.xml'
+            }
+        }
+    }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

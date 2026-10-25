@@ -3089,3 +3089,202 @@ def test_butler_error_401(jenkins):
     result = _lockable_invoke("list")
     assert result.exit_code == 1
     assert "A 401" in result.stderr
+
+
+# ── junit test results ───────────────────────────────────────────────────────
+
+
+def _junit_case(name, status="PASSED", **overrides):
+    case = {
+        "className": "app.AuthTest",
+        "name": name,
+        "status": status,
+        "duration": 0.25,
+        "age": 0,
+        "errorDetails": None,
+    }
+    case.update(overrides)
+    return case
+
+
+def _junit_report(*cases, **counts):
+    body = {
+        "passCount": 1,
+        "failCount": 1,
+        "skipCount": 0,
+        "duration": 102.0,
+        "suites": [{"name": "app.AuthTest", "cases": list(cases)}],
+    }
+    body.update(counts)
+    return body
+
+
+def _junit_http(jenkins, report=None, status_code=200):
+    build = {"number": 42, "url": f"{JENKINS_URL}/job/api/42/"}
+    jenkins.get(api("job/api/lastBuild"), json=build)
+    if report is None:
+        jenkins.get(api("job/api/42/testReport"), status_code=status_code)
+    else:
+        jenkins.get(api("job/api/42/testReport"), json=report)
+
+
+def _junit_invoke(*args):
+    return _invoke("--no-colour", "--no-update-check", "plugin", "junit", *args)
+
+
+def test_junit_group_lists_every_verb():
+    result = _invoke("plugin", "junit", "--help")
+    assert result.exit_code == 0
+    assert _listed_commands(result.output) == {"report"}
+
+
+def test_plugin_group_lists_junit():
+    assert "junit" in _listed_commands(_invoke("plugin", "--help").output)
+
+
+def test_junit_report_table(jenkins):
+    _junit_http(
+        jenkins,
+        _junit_report(
+            _junit_case("test_ok"),
+            _junit_case(
+                "test_refresh", "REGRESSION", age=1, errorDetails="expected 200\nmore"
+            ),
+        ),
+    )
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 0
+    assert "test_ok" in result.stdout
+    assert "test_refresh" in result.stdout
+    assert "REGRESSION" in result.stdout
+    assert "expected 200" in result.stdout
+    # The table shows the first line of the detail only.
+    assert "more" not in result.stdout
+    assert "1 build" in result.stdout
+    assert "Build #42 of 'api': 1 passed, 1 failed, 0 skipped in 1m42s." in (
+        result.stderr
+    )
+    assert "passed" not in result.stdout
+
+
+def test_junit_report_failed_only(jenkins):
+    _junit_http(
+        jenkins,
+        _junit_report(_junit_case("test_ok"), _junit_case("test_bad", "FAILED", age=6)),
+    )
+    result = _junit_invoke("report", "api", "--failed")
+    assert result.exit_code == 0
+    assert "test_bad" in result.stdout
+    assert "test_ok" not in result.stdout
+    assert "6 builds" in result.stdout
+
+
+def test_junit_report_failed_only_on_a_green_build_celebrates(jenkins):
+    _junit_http(jenkins, _junit_report(_junit_case("test_ok"), failCount=0))
+    result = _junit_invoke("report", "api", "--failed")
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert "Not a single failure" in result.stderr
+
+
+def test_junit_report_suite_filter_with_no_match(jenkins):
+    _junit_http(jenkins, _junit_report(_junit_case("test_ok")))
+    result = _junit_invoke("report", "api", "--suite", "nope")
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert "No tests match" in result.stderr
+
+
+def test_junit_report_json_record_keys(jenkins):
+    _junit_http(jenkins, _junit_report(_junit_case("t", "FAILED", errorDetails="x\ny")))
+    result = _invoke(
+        "--no-colour",
+        "--no-update-check",
+        "--format",
+        "json",
+        "plugin",
+        "junit",
+        "report",
+        "api",
+    )
+    assert result.exit_code == 0
+    (record,) = _json.loads(result.stdout)
+    assert set(record) == {
+        "suite",
+        "class_name",
+        "name",
+        "status",
+        "failing",
+        "duration",
+        "age",
+        "error",
+        "configuration",
+    }
+    # Structured output keeps the full detail, newlines and all.
+    assert record["error"] == "x\ny"
+
+
+def test_junit_report_matrix_shows_the_configuration_column(jenkins):
+    report = {
+        "childReports": [
+            {
+                "child": {"fullDisplayName": "api » jdk=21 #5", "url": ""},
+                "result": _junit_report(_junit_case("t", "FAILED")),
+            }
+        ]
+    }
+    _junit_http(jenkins, report)
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 0
+    assert "Configuration" in result.stdout
+    assert "jdk=21" in result.stdout
+
+
+def test_junit_report_unknown_build_exits_1(jenkins):
+    jenkins.get(api("job/api/9"), status_code=404)
+    result = _junit_invoke("report", "api", "9")
+    assert result.exit_code == 1
+    assert "I find no build '9' of 'api', sir." in result.stderr
+
+
+def test_junit_report_no_tests_published_exits_1(jenkins):
+    _junit_http(jenkins, status_code=404)
+    jenkins.get(api("pluginManager"), json={"plugins": [{"shortName": "junit"}]})
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 1
+    assert "Build #42 of 'api' published no test results, sir." in result.stderr
+    assert result.stdout == ""
+
+
+def test_junit_report_plugin_missing_exits_1(jenkins):
+    _junit_http(jenkins, status_code=404)
+    jenkins.get(api("pluginManager"), json={"plugins": []})
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 1
+    assert "JUnit plugin does not appear to be installed" in result.stderr
+
+
+def test_junit_report_undetermined_without_plugin_manager_access(jenkins):
+    _junit_http(jenkins, status_code=404)
+    jenkins.get(api("pluginManager"), status_code=403)
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 1
+    assert "not permitted to ask Jenkins which" in result.stderr
+
+
+def test_junit_report_other_errors_use_the_generic_butler_error(jenkins):
+    _junit_http(jenkins, status_code=500)
+    result = _junit_invoke("report", "api")
+    assert result.exit_code == 1
+    assert "A 500" in result.stderr
+
+
+def test_junit_case_duration_formatting():
+    assert cli_mod._junit_case_duration(0.25) == "0.25s"
+    assert cli_mod._junit_case_duration(125.0) == "2m05s"
+
+
+def test_junit_report_sub_second_total_keeps_its_fraction(jenkins):
+    _junit_http(jenkins, _junit_report(_junit_case("t"), duration=0.6))
+    result = _junit_invoke("report", "api")
+    assert "in 0.60s." in result.stderr
