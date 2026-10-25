@@ -250,6 +250,12 @@ def _has_completed_build(jenkins_container, job):
     if completed():
         return
     resp = requests.post(f"{base}/job/{job}/build", auth=auth, timeout=30)
+    if resp.status_code == 400:
+        # A parameterised job refuses /build; /buildWithParameters runs it
+        # with its declared defaults. The first run met this on e2e-pipeline.
+        resp = requests.post(
+            f"{base}/job/{job}/buildWithParameters", auth=auth, timeout=30
+        )
     assert resp.status_code in (200, 201), f"trigger said {resp.status_code}"
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
