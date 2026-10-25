@@ -68,6 +68,32 @@ forwarding to the previous page — so the status code is the only meaningful pa
 - Out of scope: `/lockable-resources/remote/v1/`, a heartbeat-driven lock-holding REST protocol
   for long-lived external clients.
 
+### Pipeline: Input Step plugin
+Not base Jenkins — `pipeline-input-step`, handled in `src/jeeves/pipeline_input.py`. A build gains
+an `InputAction` at `/job/x/N/input/` the first time it reaches an `input` step; each pending
+step hangs beneath it by its id (`InputAction.getDynamic`).
+- **There is no `/job/x/N/input/api/json`.** `InputAction` has no `getApi()`, so Stapler hands
+  `api` to `getDynamic` as an input id and answers 404 — paused or not. Read pending steps from
+  the build instead: `GET /job/x/N/api/json?tree=actions[executions[id,settled,input[...]]]`,
+  taking `executions` from whichever action carries it. The first e2e run caught this; every
+  mocked test had assumed the URL.
+- Always pass an explicit `tree`; `InputStepExecution` is `@ExportedBean(defaultVisibility = 2)`.
+  No action carrying `executions` means nothing was ever asked (or the plugin is absent) — both
+  read as "nothing pending".
+- `POST …/input/{id}/proceedEmpty` — approve an input that declares no parameters
+- `POST …/input/{id}/proceed` — form field `json` = `{"parameter":[{"name":…,"value":…}]}`.
+  **Use this whenever the input declares parameters**, filling unset ones from
+  `defaultParameterValue`: `proceedEmpty` hands the pipeline `null` and skips the defaults.
+  An unknown name fails the whole submission ("No such parameter definition").
+- `POST …/input/{id}/abort` — reject; the build ends `ABORTED`
+- Permission: a named `submitter` (users or groups, comma-separated), else Job/BUILD to approve
+  and Job/CANCEL to abort; administrators always may.
+- Refusals ("already given", "You need to be X") are `hudson.model.Failure`, whose status is no
+  contract — so jeeves **reads before posting and re-reads after**, reporting success only once
+  the step has left the pending list.
+- Resolve a permalink (`lastBuild`) to its number first, so a newer build cannot slip in between
+  the read and the POST.
+
 ## Tone and Personality
 This project is inspired by P.G. Wodehouse's Jeeves — efficient, unflappable, and faintly wry — but kept light on the formality. Use the butler voice throughout. Two hard rules:
 - **Every** Jeeves-voiced message — success, info, empty state, and error — leads with a single emoji followed by **one** space (never a double space).

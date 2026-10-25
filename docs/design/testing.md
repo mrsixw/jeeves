@@ -302,8 +302,8 @@ Two JCasC traps, both found by booting it rather than by reading docs:
 
 ### The seed jobs
 
-`e2e-freestyle`, `e2e-pipeline`, `e2e-lock-holder`, and `nested` inside
-`e2e-folder`. The names
+`e2e-freestyle`, `e2e-pipeline`, `e2e-lock-holder`, `e2e-input-waiter`, and
+`nested` inside `e2e-folder`. The names
 are fixed and spelled literally in the feature files, because interpolating
 them would need placeholder syntax that collides with Gherkin's own `<...>`
 outline parameters. The **fixture inventory** scenario asserts every one of
@@ -328,6 +328,16 @@ Why each exists:
   The scenario polls for the lock rather than sleeping a guessed interval,
   because the queue has to assign an executor first and that is not instant
   on a loaded runner.
+- **An input waiter** because a build has no `InputAction` until it reaches
+  an `input` step. (Pending steps are read from the build's `actions[]`, not
+  from `/input/api/json`, which does not exist — the first run here caught
+  jeeves and this suite's own helper both assuming it did.) Its one parameter has a default and the pipeline echoes
+  the value it received, so the console proves what Jenkins actually parsed
+  from the `json` form body — including that an approval with no `--param`
+  delivers the default rather than `null`. It runs on `agent none`, because a
+  paused input should not hold one of the fixture's two executors. Each
+  scenario triggers its own build and settles it before finishing, so a
+  paused build does not leak into the next scenario's `lastBuild`.
 
 ### The lockable resources
 

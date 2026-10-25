@@ -34,6 +34,7 @@ from .config import (
 from .jenkins import JenkinsClient, JenkinsError, normalize_jenkins_path
 from .lockable import LockableError, LockableResources, resource_records
 from .logger import configure as configure_logging
+from .pipeline_input import InputError, PipelineInput, input_records
 from .render import Column
 from .ui import THEME_NAMES, apply_seasonal_colour, colour_grade_number, get_theme
 from .updater import UpdateStatus, check_for_update, perform_update
@@ -585,6 +586,11 @@ def plugin_group() -> None:
 @plugin_group.group("lockable-resources")
 def lockable_group() -> None:
     """Manage Lockable Resources (requires the lockable-resources plugin)."""
+
+
+@plugin_group.group("input")
+def input_group() -> None:
+    """Settle paused Pipeline input steps (requires pipeline-input-step)."""
 
 
 # ── profile management ───────────────────────────────────────────────────────
@@ -2675,6 +2681,200 @@ def lockable_reset(ctx: _Ctx, name: str) -> None:
         _lockable_say(ctx, f"🧹 '{name}' was already in good order.")
     else:
         _lockable_say(ctx, f"🧹 '{name}' has been restored to good order.")
+
+
+# ── pipeline input steps ─────────────────────────────────────────────────────
+
+
+def _input_error_text(exc: InputError, job: str, number: int | None) -> str:
+    """The butler's wording for a named input-step failure.
+
+    ``_butler_fail`` supplies the 🎩, so none of these carry an emoji.
+    """
+    build = f"build #{number} of '{job}'" if number else f"'{job}'"
+    listed = ", ".join(exc.options)
+    if exc.reason == "no-build":
+        return f"I find no build '{exc.detail}' of '{job}', sir."
+    if exc.reason == "ambiguous":
+        return (
+            f"{build.capitalize()} awaits several decisions, sir. Do name one "
+            f"with --id: {listed}."
+        )
+    if exc.reason == "unknown":
+        return (
+            f"{build.capitalize()} awaits no decision called '{exc.detail}', sir. "
+            f"Those pending are: {listed}."
+        )
+    if exc.reason == "unknown-param":
+        takes = f"It takes: {listed}." if exc.options else "It takes none at all."
+        return f"The input asks for no parameter named '{exc.detail}', sir. {takes}"
+    if exc.reason == "bad-param":
+        return f"'{exc.detail}' wants true or false, sir, not '{exc.value}'."
+    if exc.reason == "refused":
+        text = (
+            "Jenkins declined to accept the decision, sir, and the input "
+            "remains pending."
+        )
+        if exc.submitter:
+            return f"{text} It is reserved for {exc.submitter}."
+        return f"{text} One suspects the requisite permission has not been granted."
+    if exc.reason == "unauthenticated":
+        return (
+            "Jenkins declined to even open the door, sir. A 401 — no credentials "
+            "were accepted. Do check your profile's username and API token."
+        )
+    text = (
+        "The household does not permit this, sir. A 403 — one suspects the "
+        "requisite permission has not been granted."
+    )
+    if exc.submitter:
+        text += f" The input is reserved for {exc.submitter}."
+    return text
+
+
+def _input_act(ctx: _Ctx, job: str, inputs: PipelineInput, action):
+    """Run one input-step call, translating its failures."""
+    try:
+        return action()
+    except InputError as exc:
+        _butler_fail(_input_error_text(exc, job, inputs.resolved), ctx.colour)
+    except JenkinsError as exc:
+        butler_error(str(exc), ctx.colour)
+        sys.exit(1)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _input_say(ctx: _Ctx, text: str) -> None:
+    click.echo(click.style(text, fg="green"), color=ctx.colour)
+
+
+def _input_params_text(r: dict) -> str:
+    return ", ".join(f"{p['name']} ({p['type']})" for p in r["parameters"])
+
+
+def _input_columns(ctx: _Ctx) -> list[Column]:
+    def id_table(r: dict, i: int) -> str:
+        s = _hyperlink(r["id"], r["url"], ctx.colour)
+        if ctx.colour and ctx.seasonal_colours:
+            s = apply_seasonal_colour(s, i, calendar=ctx.seasonal_calendar)
+        return s
+
+    return [
+        Column("id", "ID", table=id_table, plain=lambda r: r["id"]),
+        Column("message", "Message", table=lambda r, _i: r["message"] or "—"),
+        Column("ok", "Proceed", table=lambda r, _i: r["ok"]),
+        Column("cancel", "Abort", table=lambda r, _i: r["cancel"]),
+        Column(
+            "submitter",
+            "Submitter",
+            table=lambda r, _i: r["submitter"] or "—",
+            plain=lambda r: r["submitter"],
+        ),
+        Column(
+            "parameters",
+            "Parameters",
+            table=lambda r, _i: _input_params_text(r) or "—",
+            plain=_input_params_text,
+        ),
+    ]
+
+
+_INPUT_ID_OPTION = click.option(
+    "--id",
+    "input_id",
+    default=None,
+    metavar="ID",
+    help="Which input to settle; needed only when several are pending.",
+)
+
+
+@input_group.command("list")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@pass_ctx
+def input_list(ctx: _Ctx, job: str, build_id: str) -> None:
+    """List the input steps a build is paused at.
+
+    JOB is the job path (folders as folder/job); BUILD defaults to lastBuild.
+    """
+    inputs = PipelineInput(_make_client(ctx), job, build_id)
+    pending = _input_act(ctx, job, inputs, inputs.pending)
+    _emit(
+        ctx,
+        input_records(pending, inputs.url),
+        _input_columns(ctx),
+        header=f"✋ Build #{inputs.number} of '{job}' awaits your word.",
+        empty=(
+            f"😴 Build #{inputs.number} of '{job}' awaits no one's word. It is "
+            "getting along quite nicely by itself."
+        ),
+    )
+
+
+@input_group.command("approve")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@_INPUT_ID_OPTION
+@click.option(
+    "--param",
+    "params",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="A value for one of the input's parameters. Repeatable.",
+)
+@pass_ctx
+def input_approve(
+    ctx: _Ctx,
+    job: str,
+    build_id: str,
+    input_id: str | None,
+    params: tuple[str, ...],
+) -> None:
+    """Approve a paused input step, letting the build proceed.
+
+    JOB is the job path (folders as folder/job); BUILD defaults to lastBuild.
+    Parameters left unset take the input's declared defaults.
+    """
+    try:
+        values = _parse_params(params)
+    except ValueError as exc:
+        _butler_fail(f"I'm afraid '{exc}' is not in KEY=VALUE format, sir.", ctx.colour)
+    inputs = PipelineInput(_make_client(ctx), job, build_id)
+    outcome = _input_act(ctx, job, inputs, lambda: inputs.approve(input_id, values))
+    if outcome == "already":
+        _input_say(
+            ctx,
+            f"😴 Build #{inputs.number} of '{job}' awaits no one's word. "
+            "Nothing wanted doing.",
+        )
+    else:
+        _input_say(ctx, f"✅ Very good. Build #{inputs.number} of '{job}' may proceed.")
+
+
+@input_group.command("reject")
+@click.argument("job")
+@click.argument("build_id", metavar="[BUILD]", default="lastBuild")
+@_INPUT_ID_OPTION
+@pass_ctx
+def input_reject(ctx: _Ctx, job: str, build_id: str, input_id: str | None) -> None:
+    """Reject a paused input step, aborting the build.
+
+    JOB is the job path (folders as folder/job); BUILD defaults to lastBuild.
+    """
+    inputs = PipelineInput(_make_client(ctx), job, build_id)
+    outcome = _input_act(ctx, job, inputs, lambda: inputs.reject(input_id))
+    if outcome == "already":
+        _input_say(
+            ctx,
+            f"😴 Build #{inputs.number} of '{job}' awaits no one's word. "
+            "Nothing wanted doing.",
+        )
+    else:
+        _input_say(
+            ctx,
+            f"🛑 I have conveyed your regrets. Build #{inputs.number} of '{job}' "
+            "will not proceed.",
+        )
 
 
 # ── whoami ───────────────────────────────────────────────────────────────────

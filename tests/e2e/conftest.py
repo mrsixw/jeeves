@@ -155,6 +155,7 @@ class JenkinsFixture:
     folder: str
     nested_job: str
     lock_holder_job: str
+    input_waiter_job: str
 
     # Declared in casc.yaml rather than created here, because the plugin keeps
     # them in global configuration: they are part of the image's shape, not
@@ -260,6 +261,16 @@ def jenkins_container(container_runtime):
             config_xml=(DOCKER_DIR / "jobs" / "lock_holder.xml").read_text(),
         )
 
+        # Pauses at an `input` step until a scenario settles it, so the
+        # pipeline-input-step plugin's endpoints have something to answer for.
+        input_waiter = "e2e-input-waiter"
+        create_job(
+            base_url,
+            token=token,
+            name=input_waiter,
+            config_xml=(DOCKER_DIR / "jobs" / "input_waiter.xml").read_text(),
+        )
+
         # A folder with a job inside it, so a scenario can prove
         # normalize_jenkins_path's /job/<folder>/job/<name> encoding against a
         # real Jenkins. A mock would accept whatever shape we invented.
@@ -287,6 +298,7 @@ def jenkins_container(container_runtime):
             folder=folder,
             nested_job="nested",
             lock_holder_job=lock_holder,
+            input_waiter_job=input_waiter,
         )
     except NotReachable as exc:
         # Must precede the ProvisionError branch — NotReachable subclasses it.
